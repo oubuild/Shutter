@@ -1,0 +1,47 @@
+[package]
+name = "cap-photo"
+version = "0.1.0"
+description = "macOS screenshot + annotation + pin + DeepSeek vision assistant"
+authors = ["Oubuild"]
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "cap_photo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset", "macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "macos-system-configuration"] }
+xcap = "0.9"
+image = { version = "0.25", features = ["png", "jpeg"] }
+arboard = { version = "3", features = ["image-data"] }
+keyring = { version = "3", features = ["apple-native"] }
+base64 = "0.22"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

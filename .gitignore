@@ -1,0 +1,9 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+# reverse-engineering workspace (kept out of the app repo)
+.tmp/
+report/
+*.dmg
+.DS_Store

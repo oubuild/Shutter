@@ -1,0 +1,567 @@
+/* Shared design tokens. The overlay is transparent; panels are opaque cards. */
+:root {
+  --bg: #16181d;
+  --bg-elevated: #1e2128;
+  --bg-input: #12141a;
+  --border: #2c313b;
+  --border-strong: #3a4150;
+  --text: #e6e9ef;
+  --text-dim: #98a0ae;
+  --text-faint: #6b7381;
+  --accent: #3b82f6;
+  --accent-hover: #2f6fdd;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --danger: #ef4444;
+  --ok: #22c55e;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: #262a33;
+  border-color: var(--border-strong);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: transparent;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.55;
+}
+
+/* ---------- panel shell (settings / chat / pin) ---------- */
+
+.panel {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.panel-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.field .hint {
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.status.ok {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.status.bad {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.toast {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---------- chat ---------- */
+
+.chat-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-msg {
+  max-width: 92%;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+
+.chat-msg.assistant {
+  align-self: flex-start;
+  color: var(--text);
+}
+
+.chat-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+}
+
+.chat-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+.composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.composer textarea {
+  min-height: 40px;
+  max-height: 140px;
+}
+
+/* ---------- pin ---------- */
+
+.pin-root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: transparent;
+  overflow: hidden;
+}
+
+.pin-root img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  -webkit-user-drag: none;
+}
+
+.pin-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  background: rgba(22, 24, 29, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  backdrop-filter: blur(12px);
+}
+
+.pin-root:hover .pin-toolbar {
+  opacity: 1;
+}
+
+.pin-toolbar button {
+  border: none;
+  background: transparent;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.pin-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 3px 9px;
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.pin-root:hover .pin-hint {
+  opacity: 1;
+}
+
+/* ---------- overlay ---------- */
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.overlay-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  z-index: 0;
+}
+
+/* Konva sits above the frozen frame but below the chrome. */
+.overlay-root canvas {
+  position: absolute !important;
+  inset: 0;
+  z-index: 1;
+}
+
+.overlay-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.45);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.overlay-box {
+  position: absolute;
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.overlay-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.overlay-size {
+  position: absolute;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(17, 20, 26, 0.9);
+  border-radius: 5px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 4;
+}
+
+.overlay-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  color: #fff;
+  background: rgba(17, 20, 26, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 20;
+  animation: toast-in 200ms ease, toast-out 300ms ease 2.2s forwards;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes toast-out {
+  to { opacity: 0; }
+}
+
+.overlay-loading {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 13px;
+  background: rgba(17, 20, 26, 0.9);
+  padding: 10px 18px;
+  border-radius: 8px;
+  z-index: 30;
+}
+
+.overlay-menu {
+  position: fixed;
+  min-width: 132px;
+  padding: 5px;
+  background: rgba(22, 24, 29, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.overlay-menu button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 12.5px;
+}
+
+.overlay-menu button:hover {
+  background: var(--accent);
+}
+
+.overlay-menu .sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+/* ---------- toolbar ---------- */
+
+.cap-toolbar {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 8px;
+  background: rgba(22, 24, 29, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  z-index: 10;
+  backdrop-filter: blur(14px);
+}
+
+.cap-tools {
+  display: flex;
+  gap: 1px;
+}
+
+.cap-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  color: var(--text-dim);
+}
+
+.cap-icon:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.cap-icon.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cap-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.cap-swatches {
+  position: relative;
+}
+
+.cap-color {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.75);
+}
+
+.cap-palette {
+  position: absolute;
+  top: 30px;
+  left: -10px;
+  display: grid;
+  grid-template-columns: repeat(4, 18px);
+  gap: 6px;
+  padding: 8px;
+  background: rgba(22, 24, 29, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 12;
+}
+
+.cap-dot {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
+}
+
+.cap-dot.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cap-width {
+  width: 62px;
+  accent-color: var(--accent);
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.cap-width:focus {
+  box-shadow: none;
+}
+
+.cap-action {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.cap-action.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.cap-action.quiet {
+  color: var(--text-dim);
+}
