@@ -63,6 +63,13 @@ export function Overlay({ monitorId }: Props) {
   const drag = useRef<Drag | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const sourceRef = useRef<HTMLImageElement | null>(null);
+  /** Offscreen copy of the frozen frame, reused for pixel sampling. */
+  const sampleRef = useRef<HTMLCanvasElement | null>(null);
+  /** Live readout for the eyedropper: position + sampled colour. */
+  const [picker, setPicker] = useState<{ x: number; y: number; hex: string; rgb: string } | null>(
+    null,
+  );
+  const pickerCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
@@ -100,6 +107,16 @@ export function Overlay({ monitorId }: Props) {
         img.src = src;
         await img.decode().catch(() => undefined);
         sourceRef.current = img;
+
+        // One full-size copy is enough for every eyedropper sample; drawing
+        // the 5MP frame on each pick was both slow and wasteful.
+        const sample = document.createElement("canvas");
+        sample.width = img.naturalWidth;
+        sample.height = img.naturalHeight;
+        sample
+          .getContext("2d", { willReadFrequently: true })
+          ?.drawImage(img, 0, 0);
+        sampleRef.current = sample;
       } catch (e) {
         setToast(errorText(e));
       }
@@ -147,7 +164,10 @@ export function Overlay({ monitorId }: Props) {
       setMenu(null);
       const p = pos();
 
-      if (box) {
+      // Moving/resizing belongs to the select tool. Without this gate a
+      // drawing tool pressed inside the selection grabbed the box and moved it,
+      // which is why annotations only worked outside the screenshot area.
+      if (box && tool === "select") {
         const handle = hitHandle(box, p);
         if (handle === "move") {
           drag.current = { mode: "move", grab: p, origin: box };
@@ -166,11 +186,12 @@ export function Overlay({ monitorId }: Props) {
         return;
       }
 
-      if (!box) return;
+      // Picking a colour does not need a crop, so it works before/without a box.
       if (tool === "picker") {
         pickColor(p);
         return;
       }
+      if (!box) return;
       drag.current = { mode: "draw", start: p };
       setDraft(makeShape(tool, p, p));
     },
@@ -182,6 +203,12 @@ export function Overlay({ monitorId }: Props) {
     const p = pos();
     const d = drag.current;
     if (!d) {
+      if (tool === "picker") {
+        const seen = sampleAt(p);
+        setPicker(seen ? { x: p.x, y: p.y, ...seen } : null);
+        setCursor("crosshair");
+        return;
+      }
       if (box && tool === "select") {
         const cursor = cursorFor(hitHandle(box, p));
         setCursor(cursor);
@@ -221,6 +248,48 @@ export function Overlay({ monitorId }: Props) {
       }
     }
   }, [box, draft, pos, stageSize.h, stageSize.w, tool]);
+
+  // The loupe only exists while the eyedropper is active.
+  useEffect(() => {
+    if (tool !== "picker") setPicker(null);
+  }, [tool]);
+
+  // Paint the magnifier: a 15x15 pixel window from the frozen frame, drawn
+  // nearest-neighbour so every source pixel is a crisp square, with the picked
+  // pixel ringed in the middle.
+  useEffect(() => {
+    if (!picker || tool !== "picker") return;
+    const canvas = pickerCanvasRef.current;
+    const sample = sampleRef.current;
+    if (!canvas || !sample || !monitor) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const ratio = sample.width / monitor.width;
+    const cells = 15;
+    const size = canvas.width;
+    const cell = size / cells;
+    const cx = Math.round(picker.x * ratio);
+    const cy = Math.round(picker.y * ratio);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(
+      sample,
+      cx - (cells - 1) / 2,
+      cy - (cells - 1) / 2,
+      cells,
+      cells,
+      0,
+      0,
+      size,
+      size,
+    );
+    const offset = Math.floor(cells / 2) * cell;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.strokeRect(offset - 0.5, offset - 0.5, cell + 1, cell + 1);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.strokeRect(offset + 0.5, offset + 0.5, cell - 1, cell - 1);
+  }, [picker, tool, monitor]);
 
   const onMouseUp = useCallback(() => {
     const d = drag.current;
@@ -348,31 +417,29 @@ export function Overlay({ monitorId }: Props) {
     }
   };
 
-  const pickColor = (p: Point) => {
-    const stage = stageRef.current;
-    const img = sourceRef.current;
-    if (!stage || !img || !monitor) return;
-    const ratio = img.naturalWidth / monitor.width;
-    const canvas = document.createElement("canvas");
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-    ctx.drawImage(img, 0, 0);
-    const px = Math.round(p.x * ratio);
-    const py = Math.round(p.y * ratio);
-    const data = ctx.getImageData(
-      Math.min(Math.max(px, 0), canvas.width - 1),
-      Math.min(Math.max(py, 0), canvas.height - 1),
-      1,
-      1,
-    ).data;
+  /** Read one pixel out of the cached frame copy. */
+  const sampleAt = (p: Point): { hex: string; rgb: string } | null => {
+    const sample = sampleRef.current;
+    if (!sample || !monitor) return null;
+    const ratio = sample.width / monitor.width;
+    const px = Math.min(Math.max(Math.round(p.x * ratio), 0), sample.width - 1);
+    const py = Math.min(Math.max(Math.round(p.y * ratio), 0), sample.height - 1);
+    const data = sample
+      .getContext("2d", { willReadFrequently: true })
+      ?.getImageData(px, py, 1, 1).data;
+    if (!data) return null;
     const hex = `#${[data[0], data[1], data[2]]
       .map((v) => v.toString(16).padStart(2, "0"))
       .join("")}`;
-    setColor(hex);
-    setToast(`已取色 ${hex}`);
-    void api.copyText(hex).catch(() => undefined);
+    return { hex, rgb: `rgb(${data[0]}, ${data[1]}, ${data[2]})` };
+  };
+
+  const pickColor = (p: Point) => {
+    const seen = sampleAt(p);
+    if (!seen) return;
+    setColor(seen.hex);
+    setToast(`已取色 ${seen.hex.toUpperCase()}`);
+    void api.copyText(seen.hex).catch(() => undefined);
   };
 
   /* --------------------------------------------------------------- output */
@@ -567,6 +634,34 @@ export function Overlay({ monitorId }: Props) {
         />
       )}
 
+      {tool === "picker" && picker && (
+        <div
+          className="picker-hud"
+          style={{
+            left: Math.min(picker.x + 20, stageSize.w - 146),
+            top:
+              picker.y + 20 + 168 > stageSize.h
+                ? Math.max(8, picker.y - 168)
+                : picker.y + 20,
+          }}
+        >
+          <canvas
+            ref={pickerCanvasRef}
+            className="picker-zoom"
+            width={105}
+            height={105}
+          />
+          <div className="picker-meta">
+            <span className="picker-swatch" style={{ background: picker.hex }} />
+            <div className="picker-values">
+              <code className="picker-hex">{picker.hex.toUpperCase()}</code>
+              <span className="picker-rgb">{picker.rgb}</span>
+            </div>
+          </div>
+          <div className="picker-hint">点击复制 HEX</div>
+        </div>
+      )}
+
       {menu && box && (
         <div className="overlay-menu" style={{ left: menu.x, top: menu.y }}>
           <button onClick={() => void confirm("copy")}>复制</button>
@@ -582,7 +677,14 @@ export function Overlay({ monitorId }: Props) {
       )}
 
       {toast && (
-        <div className="overlay-toast" onAnimationEnd={() => setToast(null)}>
+        <div
+          className="overlay-toast"
+          // The element runs toast-in first; only its exit animation should
+          // clear the text, or the toast would vanish the moment it appeared.
+          onAnimationEnd={(e) => {
+            if (e.animationName === "toast-out") setToast(null);
+          }}
+        >
           {toast}
         </div>
       )}

@@ -867,9 +867,6 @@ export function SettingsView({ active = true }: Props) {
           )}
           {footerState.text}
         </span>
-        <kbd className="app-kbd flex-none" aria-hidden="true">
-          ⌘S
-        </kbd>
         <button
           type="button"
           className="btn-primary flex-none"
