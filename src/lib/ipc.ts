@@ -48,6 +48,13 @@ export type AiBind = { cropId: string; action: AiAction | null };
 export type AiDelta = { requestId: string; text: string };
 export type AiDone = { requestId: string; ok: boolean; error: string | null };
 
+export type Preset = {
+  label: string;
+  baseUrl: string;
+  model: string;
+  note: string;
+};
+
 export type Settings = {
   baseUrl: string;
   model: string;
@@ -75,6 +82,7 @@ export const api = {
   aiAsk: (request: AiRequest, requestId: string) =>
     invoke<void>("ai_ask", { request, requestId }),
   getSettings: () => invoke<Settings>("get_settings"),
+  modelPresets: () => invoke<Preset[]>("model_presets"),
   saveSettings: (settings: Settings) =>
     invoke<void>("save_settings_cmd", { settings }),
   setApiKey: (key: string) => invoke<void>("set_api_key", { key }),

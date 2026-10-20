@@ -137,3 +137,45 @@ impl Default for Settings {
         }
     }
 }
+
+/// Well-known OpenAI-compatible endpoints offered in the settings UI.
+///
+/// These are only suggestions: any endpoint that accepts the OpenAI chat
+/// completions shape with image parts will work.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preset {
+    pub label: &'static str,
+    pub base_url: &'static str,
+    pub model: &'static str,
+    pub note: &'static str,
+}
+
+pub fn presets() -> Vec<Preset> {
+    vec![
+        Preset {
+            label: "DeepSeek",
+            base_url: "https://api.deepseek.com",
+            model: "deepseek-flash",
+            note: "官方视觉模型，支持图片输入",
+        },
+        Preset {
+            label: "通义千问 (DashScope 兼容模式)",
+            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model: "qwen-vl-max",
+            note: "需选择带 -vl- 的视觉模型",
+        },
+        Preset {
+            label: "OpenAI",
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4o-mini",
+            note: "任意支持 image_url 的模型",
+        },
+        Preset {
+            label: "本地 Ollama",
+            base_url: "http://127.0.0.1:11434/v1",
+            model: "llava",
+            note: "本地推理，数据不出机器",
+        },
+    ]
+}

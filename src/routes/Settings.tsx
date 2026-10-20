@@ -1,12 +1,44 @@
 import { useEffect, useState } from "react";
-import { api, errorText, type Settings } from "../lib/ipc";
+import { invoke } from "@tauri-apps/api/core";
+import { api, errorText, type Preset, type Settings } from "../lib/ipc";
 
 /**
  * Settings window. The backend never returns the stored API key, so the
  * password field is write-only: it starts empty and is cleared after saving.
  */
 export function SettingsView() {
+  // Debug: confirm the window rendered and report a couple of computed styles.
+  useEffect(() => {
+    const el = document.querySelector(".panel");
+    const btn = document.querySelector("button.primary") as HTMLElement | null;
+    invoke("debug_report", {
+      stage: "settings-ready",
+      detail: JSON.stringify({
+        panel: !!el,
+        bg: el ? getComputedStyle(el).backgroundColor : null,
+        primaryBg: btn ? getComputedStyle(btn).backgroundColor : null,
+        primaryFg: btn ? getComputedStyle(btn).color : null,
+        fields: document.querySelectorAll("input").length,
+      }),
+    }).catch(() => undefined);
+
+    // Re-report after the async load settles, so field rendering is verified.
+    const timer = window.setTimeout(() => {
+      invoke("debug_report", {
+        stage: "settings-loaded",
+        detail: JSON.stringify({
+          fields: document.querySelectorAll("input").length,
+          checkboxes: document.querySelectorAll('input[type="checkbox"]').length,
+          buttons: Array.from(document.querySelectorAll("button")).map((b) => b.textContent?.trim()),
+          status: document.querySelector(".status")?.textContent?.trim() ?? null,
+        }),
+      }).catch(() => undefined);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   const [form, setForm] = useState<Settings | null>(null);
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [keyStatus, setKeyStatus] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
@@ -18,13 +50,15 @@ export function SettingsView() {
     let alive = true;
     (async () => {
       try {
-        const [loaded, hasKey] = await Promise.all([
+        const [loaded, hasKey, list] = await Promise.all([
           api.getSettings(),
           api.apiKeyStatus(),
+          api.modelPresets(),
         ]);
         if (!alive) return;
         setForm(loaded);
         setKeyStatus(hasKey);
+        setPresets(list);
       } catch (e) {
         if (alive) setError(errorText(e));
       }
@@ -40,6 +74,14 @@ export function SettingsView() {
     const timer = window.setTimeout(() => setSaved(false), 2000);
     return () => window.clearTimeout(timer);
   }, [saved]);
+
+  /** Apply a preset's endpoint + model in one click; the key is unchanged. */
+  function applyPreset(preset: Preset) {
+    setForm((prev) =>
+      prev ? { ...prev, baseUrl: preset.baseUrl, model: preset.model } : prev,
+    );
+    setSaved(false);
+  }
 
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -109,6 +151,31 @@ export function SettingsView() {
           <div className="hint">{error ? "加载设置失败" : "加载中…"}</div>
         ) : (
           <>
+            <div className="field">
+              <label>快速选择</label>
+              <div className="preset-row">
+                {presets.map((p) => {
+                  const active =
+                    p.baseUrl === form.baseUrl && p.model === form.model;
+                  return (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className={`preset ${active ? "active" : ""}`}
+                      title={p.note}
+                      onClick={() => applyPreset(p)}
+                    >
+                      <span className="preset-label">{p.label}</span>
+                      <span className="preset-model">{p.model}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="hint">
+                点选即可填入下面的地址与模型；也可直接手填任意兼容端点。
+              </div>
+            </div>
+
             <div className="field">
               <label htmlFor="base-url">服务地址</label>
               <input

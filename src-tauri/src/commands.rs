@@ -14,7 +14,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// shown immediately without a second capture (which would flicker).
 pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     let store: State<'_, Arc<crate::session::Store>> = app.state();
-    overlay::hide_all(app);
+
+    // Tear down any previous overlay BEFORE capturing, otherwise the new frame
+    // would contain the old overlay.
+    overlay::destroy_all(app);
+    // Give macOS a beat to remove the windows from the window server.
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
     let displays = crate::capture::displays()?;
     if displays.is_empty() {
@@ -22,18 +27,10 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     }
     let monitors: Vec<MonitorInfo> = displays.iter().map(|d| d.info.clone()).collect();
 
-    // Windows are created hidden, then the frames are captured, then the
-    // overlays are revealed. Creating them first avoids a first-paint delay
-    // (WKWebView boot takes ~200ms) while still keeping the capture clean of
-    // transient windows such as dock magnification.
-    for info in &monitors {
-        overlay::ensure(app, info.id, info.x, info.y, info.width, info.height)?;
-    }
-
+    // Capture first, then build the windows: the frames stay clean and the
+    // overlay never races the capture.
     let session = store.begin(displays)?;
 
-    // Hand the frozen desktop to each overlay as a file: the asset protocol is
-    // far cheaper than a multi-megabyte data URL over IPC.
     let frame_dir = settings::app_dir()?.join("frames");
     for info in &monitors {
         store.write_frame_png(info.id, &frame_dir)?;
@@ -41,18 +38,24 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     crate::session::Store::prune_frames(&frame_dir, &session.id);
 
     for info in &monitors {
-        if let Some(win) = app.get_webview_window(&overlay::label_for(info.id)) {
-            overlay::show(&win)?;
-        }
+        let win = overlay::create(app, info.id, info.x, info.y, info.width, info.height)?;
+        overlay::reveal(&win)?;
     }
 
     let session_id = session.id.clone();
     app.emit("capture://ready", &session_id)?;
+    log::info!(
+        "capture session {session_id} ready with {} overlay(s): {:?}",
+        monitors.len(),
+        app.webview_windows().keys().cloned().collect::<Vec<_>>()
+    );
 
-    Ok(CaptureSession {
-        session_id,
-        monitors,
-    })
+    Ok(CaptureSession { session_id, monitors })
+}
+
+#[tauri::command]
+pub async fn capture_screens(app: AppHandle) -> std::result::Result<CaptureSession, String> {
+    start_capture(&app).await.map_err(|e| format!("{e:#}"))
 }
 
 /// Descriptor of the session that is currently active, if any.
@@ -69,27 +72,56 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
     })
 }
 
+/// Debug-only: open one of the auxiliary windows by view name.
+#[tauri::command]
+pub fn debug_open_view(app: AppHandle, view: String) -> std::result::Result<(), String> {
+    match view.as_str() {
+        "settings" => windows::open_settings(&app).map_err(|e| format!("{e:#}")),
+        "chat" => windows::open_chat(&app, None, None).map_err(|e| format!("{e:#}")),
+        other => Err(format!("unknown view {other}")),
+    }
+}
+
+/// Debug-only: open a plain window to compare against the overlay window.
+#[tauri::command]
+pub fn debug_plain_window(app: AppHandle) -> std::result::Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if app.get_webview_window("plain").is_some() {
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "plain", WebviewUrl::App("index.html?view=settings".into()))
+        .title("plain test")
+        .inner_size(500.0, 400.0)
+        .position(200.0, 200.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Debug-only: frontend reports its boot state; logged so the terminal can see
+/// whether the webview actually executed any JavaScript.
+#[tauri::command]
+pub fn debug_report(stage: String, detail: String) {
+    log::info!("[fe] {stage}: {detail}");
+}
+
 /// Absolute path of the frozen frame for a monitor, for `convertFileSrc`.
 #[tauri::command]
 pub fn frame_path(app: AppHandle, monitor_id: u32, session_id: String) -> Option<String> {
     let dir = settings::app_dir().ok()?.join("frames");
     let path = dir.join(format!("frame-{session_id}-{monitor_id}.png"));
     if !path.exists() {
+        log::warn!("frame file missing: {}", path.display());
         return None;
     }
     let _ = app.asset_protocol_scope().allow_file(&path);
     Some(path.display().to_string())
 }
 
-#[tauri::command]
-pub async fn capture_screens(app: AppHandle) -> std::result::Result<CaptureSession, String> {
-    start_capture(&app).await.map_err(|e| format!("{e:#}"))
-}
-
 /// Close every overlay without producing an image.
 #[tauri::command]
 pub fn cancel_capture(app: AppHandle) -> std::result::Result<(), String> {
-    overlay::hide_all(&app);
+    overlay::destroy_all(&app);
     app.state::<Arc<crate::session::Store>>().clear();
     let _ = app.emit("capture://cancelled", ());
     Ok(())
@@ -171,7 +203,7 @@ async fn do_confirm(
     }
 
     let crop_id = store.put_crop(png);
-    overlay::hide_all(&app);
+    overlay::destroy_all(&app);
 
     Ok(CaptureResult {
         crop_id,
@@ -209,6 +241,12 @@ pub async fn ai_ask(
 #[tauri::command]
 pub fn ai_actions() -> Vec<&'static str> {
     vec!["extract", "translate", "explain", "ask"]
+}
+
+/// Suggested endpoints for the settings window.
+#[tauri::command]
+pub fn model_presets() -> Vec<crate::types::Preset> {
+    crate::types::presets()
 }
 
 #[tauri::command]
@@ -285,7 +323,32 @@ pub fn crop_data_url(crop_id: String, app: AppHandle) -> std::result::Result<Str
 /// Open a pin window for an already-captured crop.
 #[tauri::command]
 pub fn pin_crop(crop_id: String, app: AppHandle) -> std::result::Result<(), String> {
-    let rect = Rect { x: 120.0, y: 120.0, width: 420.0, height: 320.0 };
+    let store: State<'_, Arc<crate::session::Store>> = app.state();
+    let info = store.crop_info(&crop_id).map_err(|e| format!("{e:#}"))?;
+
+    // Match the window to the image, capped so a full-screen crop does not
+    // create a window larger than the desktop.
+    let (sw, sh) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let s = m.scale_factor();
+            (
+                (m.size().width as f64 / s) as f64,
+                (m.size().height as f64 / s) as f64,
+            )
+        })
+        .unwrap_or((1440.0, 900.0));
+    let scale = (sw * 0.8 / info.width as f64)
+        .min(sh * 0.8 / info.height as f64)
+        .min(1.0);
+    let rect = Rect {
+        x: ((sw - info.width as f64 * scale) / 2.0).max(0.0),
+        y: ((sh - info.height as f64 * scale) / 2.0).max(0.0),
+        width: info.width as f64 * scale,
+        height: info.height as f64 * scale,
+    };
     pin::ensure(&app, &crop_id, rect).map_err(|e| format!("{e:#}"))?;
     Ok(())
 }

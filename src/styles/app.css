@@ -323,6 +323,18 @@ textarea {
   z-index: 0;
 }
 
+/* Background image lives on a plain div: Safari sometimes refuses to paint a
+   decoded <img> inside a transparent, borderless window on first frame. */
+.overlay-stage-host {
+  position: absolute;
+  inset: 0;
+  background-position: 0 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* Konva sits above the frozen frame but below the chrome. */
 .overlay-root canvas {
   position: absolute !important;
@@ -333,17 +345,27 @@ textarea {
 .overlay-dim {
   position: absolute;
   inset: 0;
-  background: rgba(8, 10, 14, 0.45);
+  /* 30% black, matching the reference mask (#0000004d). */
+  background: rgba(0, 0, 0, 0.3);
   pointer-events: none;
   z-index: 2;
 }
 
 .overlay-box {
   position: absolute;
-  border: 1.5px solid rgba(255, 255, 255, 0.95);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  border: 1px solid #fff;
+  box-sizing: border-box;
   pointer-events: none;
   z-index: 3;
+}
+
+/* Dashed inner ring, exactly as the reference draws the crop border. */
+.overlay-box::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px dashed #000;
+  pointer-events: none;
 }
 
 .overlay-handle {
@@ -361,11 +383,11 @@ textarea {
 .overlay-size {
   position: absolute;
   padding: 3px 7px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   color: #fff;
-  background: rgba(17, 20, 26, 0.9);
-  border-radius: 5px;
+  background: #282d32;
+  border-radius: 4px;
   pointer-events: none;
   white-space: nowrap;
   z-index: 4;
@@ -373,6 +395,7 @@ textarea {
 
 .overlay-toast {
   position: fixed;
+  color: #fff;
   left: 50%;
   bottom: 28px;
   transform: translateX(-50%);
@@ -411,6 +434,7 @@ textarea {
 
 .overlay-menu {
   position: fixed;
+  color: var(--text);
   min-width: 132px;
   padding: 5px;
   background: rgba(22, 24, 29, 0.97);
@@ -426,6 +450,7 @@ textarea {
 .overlay-menu button {
   border: none;
   background: transparent;
+  color: var(--text);
   text-align: left;
   padding: 6px 10px;
   border-radius: 5px;
@@ -442,84 +467,101 @@ textarea {
   margin: 4px 2px;
 }
 
-/* ---------- toolbar ---------- */
+/* ---------- toolbar ----------
+   Metrics measured from the reference UI: 44px bar, 8px radius, #2c2c2c on a
+   1px rgba(0,0,0,.15) border, 36px hit targets, 8px gaps, #1b77ff for the
+   selected tool. Kept as tokens so light mode is a one-line swap. */
 
 .cap-toolbar {
+  --bar-bg: #2c2c2c;
+  --bar-border: rgba(0, 0, 0, 0.15);
+  --bar-fg: #ffffff;
+  --bar-hover: rgba(255, 255, 255, 0.08);
+  --bar-active: rgba(255, 255, 255, 0.08);
+  --bar-accent: #1b77ff;
+  --bar-divider: rgba(255, 255, 255, 0.12);
+
   position: fixed;
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 40px;
-  padding: 0 8px;
-  background: rgba(22, 24, 29, 0.97);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  box-shadow: var(--shadow);
+  gap: 6px;
+  height: 44px;
+  padding: 0 6px;
+  color: var(--bar-fg);
+  background: var(--bar-bg);
+  border: 1px solid var(--bar-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
   z-index: 10;
-  backdrop-filter: blur(14px);
 }
 
 .cap-tools {
   display: flex;
-  gap: 1px;
+  align-items: center;
+  gap: 0;
 }
 
+/* 32x32 targets keep the reference's 8px radius and 44px bar while fitting
+   twenty controls without the bar growing past a third of the screen. */
 .cap-icon {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   border: none;
   background: transparent;
-  border-radius: 5px;
-  color: var(--text-dim);
+  border-radius: 8px;
+  color: var(--bar-fg);
 }
 
 .cap-icon:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
+  background: var(--bar-hover);
 }
 
 .cap-icon.active {
-  background: var(--accent);
-  color: #fff;
+  background: var(--bar-active);
+  color: var(--bar-accent);
 }
 
 .cap-sep {
   width: 1px;
-  height: 20px;
-  background: var(--border);
-  margin: 0 4px;
+  height: 14px;
+  background: var(--bar-divider);
+  margin: 0 2px;
+  flex: 0 0 auto;
 }
 
 .cap-swatches {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .cap-color {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.75);
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
 }
 
 .cap-palette {
   position: absolute;
-  top: 30px;
-  left: -10px;
-  display: grid;
-  grid-template-columns: repeat(4, 18px);
-  gap: 6px;
-  padding: 8px;
-  background: rgba(22, 24, 29, 0.98);
-  border: 1px solid var(--border);
+  top: 34px;
+  left: -8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 148px;
+  padding: 12px;
+  background: #2c2c2c;
+  border: 1px solid rgba(0, 0, 0, 0.15);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
   z-index: 12;
 }
 
@@ -527,41 +569,121 @@ textarea {
   width: 18px;
   height: 18px;
   padding: 0;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: opacity 0.1s;
+}
+
+.cap-dot:hover {
+  opacity: 0.9;
 }
 
 .cap-dot.active {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  border-color: #fff;
 }
 
 .cap-width {
-  width: 62px;
-  accent-color: var(--accent);
+  width: 52px;
+  accent-color: var(--bar-accent);
   padding: 0;
   background: transparent;
   border: none;
+  cursor: pointer;
+  flex: 0 0 auto;
 }
 
-.cap-width:focus {
-  box-shadow: none;
+.cap-width::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
 }
 
-.cap-action {
-  height: 26px;
-  padding: 0 9px;
-  font-size: 12px;
-  border-radius: 5px;
-  white-space: nowrap;
+.cap-width::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.35);
 }
 
-.cap-action.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+/* The confirm action is the only filled control in the bar. */
+.cap-icon.primary {
+  background: var(--bar-accent);
   color: #fff;
 }
 
-.cap-action.quiet {
-  color: var(--text-dim);
+.cap-icon.primary:hover:not(:disabled) {
+  background: #2f83ff;
+}
+
+.cap-icon:disabled {
+  color: rgba(255, 255, 255, 0.35);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+/* Icons are inline SVG; keep them optically centred in the 36px target. */
+.cap-icon svg {
+  display: block;
+  pointer-events: none;
+}
+
+/* ---------- selection chrome ---------- */
+
+/* Handles and border follow the reference: 10px white dots with a 1px black
+   ring, so they read on both light and dark wallpaper. */
+.overlay-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: #fff;
+  border: 1px solid #000;
+  border-radius: 50%;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* ---------- settings presets ---------- */
+
+.preset-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.preset:hover {
+  border-color: var(--border-strong);
+  background: #262a33;
+}
+
+.preset.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.preset-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.preset-model {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }

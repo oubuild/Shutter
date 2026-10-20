@@ -54,3 +54,31 @@ pub fn displays() -> Result<Vec<Display>> {
     out.sort_by_key(|d| (!d.info.is_primary, d.info.x, d.info.y));
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Smoke test for the real capture path. Run with:
+    ///   cargo test --lib capture::tests::capture_works -- --ignored --nocapture
+    ///
+    /// Requires Screen Recording permission for the test binary's parent
+    /// terminal; without it macOS returns a black frame rather than an error,
+    /// so the assertion checks dimensions, not content.
+    #[test]
+    #[ignore]
+    fn capture_works() {
+        let displays = displays().expect("enumerate displays");
+        assert!(!displays.is_empty(), "expected at least one display");
+        for d in &displays {
+            println!(
+                "monitor {} '{}' logical {}x{} @{}x{} scale {}",
+                d.info.id, d.info.name, d.info.width, d.info.height, d.info.x, d.info.y, d.info.scale_factor
+            );
+            let frame = d.capture().expect("capture frame");
+            println!("  frame {}x{}", frame.width(), frame.height());
+            assert_eq!(frame.width(), d.info.pixel_width);
+            assert_eq!(frame.height(), d.info.pixel_height);
+        }
+    }
+}

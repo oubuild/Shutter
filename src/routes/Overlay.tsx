@@ -5,7 +5,7 @@ import { Layer, Stage } from "react-konva";
 import Konva from "konva";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Toolbar } from "../components/Toolbar";
+import { Toolbar, type ToolbarAction } from "../components/Toolbar";
 import { ShapeNode } from "../canvas/ShapeNode";
 import {
   TOOL_KEYS,
@@ -77,6 +77,9 @@ export function Overlay({ monitorId }: Props) {
     let cancelled = false;
     (async () => {
       try {
+        await import("@tauri-apps/api/core")
+          .then((m) => m.invoke("debug_report", { stage: "overlay-mount", detail: String(monitorId) }))
+          .catch(() => undefined);
         // Rust creates the session and shows this window; it also emits
         // `capture://ready` with the session id. Reuse it instead of capturing
         // a second time (a second capture would include this very overlay).
@@ -109,6 +112,19 @@ export function Overlay({ monitorId }: Props) {
   const stageSize = monitor
     ? { w: monitor.width, h: monitor.height }
     : { w: size.w, h: size.h };
+
+  // Debug affordance: `?debug=box` preselects a centred region so the toolbar
+  // can be exercised without a mouse (used by automation).
+  const debugBox = new URLSearchParams(window.location.search).has("debug");
+  useEffect(() => {
+    if (!debugBox || !monitor || box) return;
+    setBox({
+      x: Math.round(monitor.width * 0.25),
+      y: Math.round(monitor.height * 0.25),
+      width: Math.round(monitor.width * 0.5),
+      height: Math.round(monitor.height * 0.4),
+    });
+  }, [debugBox, monitor, box]);
 
   /* ---------------------------------------------------------------- input */
 
@@ -448,6 +464,14 @@ export function Overlay({ monitorId }: Props) {
 
   return (
     <div className="overlay-root" style={{ cursor }} onContextMenu={(e) => e.preventDefault()}>
+      <div
+        className="overlay-stage-host"
+        style={{
+          width: stageSize.w,
+          height: stageSize.h,
+          backgroundImage: frameSrc ? `url(${frameSrc})` : undefined,
+        }}
+      />
       <Stage
         ref={stageRef}
         width={stageSize.w}
@@ -534,7 +558,7 @@ export function Overlay({ monitorId }: Props) {
           onStrokeWidth={setStrokeWidth}
           onFilled={setFilled}
           onUndo={() => setShapes((prev) => prev.slice(0, -1))}
-          onAction={(a) => {
+          onAction={(a: ToolbarAction) => {
             if (a === "cancel") void cancel();
             else if (a === "extract" || a === "translate" || a === "explain" || a === "ask")
               void runAi(a);

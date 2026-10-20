@@ -139,10 +139,11 @@ impl AiClient {
     }
 
     /// Stream one answer, emitting `ai://delta` / `ai://done`.
-    pub async fn stream(
+    /// Transport core: POST the request and hand every text delta to `on_delta`.
+    ///
+    /// Kept free of `AppHandle` so it can be exercised against a mock server.
+    pub async fn stream_with<F>(
         &self,
-        app: &AppHandle,
-        request_id: &str,
         base_url: &str,
         model: &str,
         api_key: &str,
@@ -150,7 +151,11 @@ impl AiClient {
         lang: Option<&str>,
         question: Option<&str>,
         png: &[u8],
-    ) -> Result<()> {
+        mut on_delta: F,
+    ) -> Result<()>
+    where
+        F: FnMut(String),
+    {
         let (system, user) = prompt_for(action, lang, question);
         let body = request_body(model, &system, &user, png);
 
@@ -180,6 +185,9 @@ impl AiClient {
             let text = String::from_utf8_lossy(&chunk);
             for payload in sse.push(&text) {
                 if payload == "[DONE]" {
+                    if !emitted {
+                        return Err(anyhow!("模型没有返回任何内容"));
+                    }
                     return Ok(());
                 }
                 if let Some(delta) = delta_from_sse(&payload) {
@@ -187,10 +195,7 @@ impl AiClient {
                         return Err(anyhow!("{}", msg.trim_start_matches("ERROR:")));
                     }
                     emitted = true;
-                    let _ = app.emit(
-                        "ai://delta",
-                        AiDelta { request_id: request_id.to_string(), text: delta },
-                    );
+                    on_delta(delta);
                 }
             }
         }
@@ -199,6 +204,30 @@ impl AiClient {
             return Err(anyhow!("模型没有返回任何内容"));
         }
         Ok(())
+    }
+
+    /// Emit deltas to the webview while streaming.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn stream(
+        &self,
+        app: &AppHandle,
+        request_id: &str,
+        base_url: &str,
+        model: &str,
+        api_key: &str,
+        action: AiAction,
+        lang: Option<&str>,
+        question: Option<&str>,
+        png: &[u8],
+    ) -> Result<()> {
+        let request_id = request_id.to_string();
+        self.stream_with(base_url, model, api_key, action, lang, question, png, |text| {
+            let _ = app.emit(
+                "ai://delta",
+                AiDelta { request_id: request_id.clone(), text },
+            );
+        })
+        .await
     }
 }
 

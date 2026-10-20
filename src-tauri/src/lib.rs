@@ -54,6 +54,39 @@ pub fn run() {
                 log::warn!("cannot register Cmd+Shift+A ({e}); the tray menu still works");
             }
 
+            // Debug hook: lets automation verify the overlay without sending a
+            // global shortcut (which needs Accessibility permission).
+            log::info!("debug capture-on-start env: {:?}", std::env::var("CAP_PHOTO_CAPTURE_ON_START"));
+            if std::env::var("CAP_PHOTO_CAPTURE_ON_START").is_ok() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                    log::info!("capture-on-start: firing");
+                    let result = tauri::async_runtime::block_on(commands::start_capture(&handle));
+                    match result {
+                        Ok(s) => {
+                            log::info!("capture-on-start ok: session {} monitors {}", s.session_id, s.monitors.len());
+
+                        }
+                        Err(e) => log::error!("capture-on-start failed: {e:#}"),
+                    }
+                    if std::env::var("CAP_PHOTO_PLAIN_TEST").is_ok() {
+                        let _ = commands::debug_plain_window(handle.clone());
+                    }
+                });
+            }
+
+            // Independent of capture: open an auxiliary window for UI checks.
+            if let Ok(view) = std::env::var("CAP_PHOTO_OPEN_VIEW") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(900));
+                    if let Err(e) = commands::debug_open_view(handle, view) {
+                        log::error!("debug_open_view failed: {e}");
+                    }
+                });
+            }
+
             if !settings::has_api_key() {
                 log::info!("no API key configured yet; the AI actions will prompt for one");
             }
@@ -63,6 +96,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::capture_screens,
             commands::current_session,
+            commands::debug_report,
+            commands::debug_plain_window,
+            commands::debug_open_view,
             commands::frame_path,
             commands::cancel_capture,
             commands::confirm_capture,
@@ -70,6 +106,7 @@ pub fn run() {
             commands::ai_actions,
             commands::action_hint,
             commands::get_settings,
+            commands::model_presets,
             commands::save_settings_cmd,
             commands::set_api_key,
             commands::clear_api_key,

@@ -36,6 +36,13 @@ pub struct Store {
     crops: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+/// A crop plus the dimensions the pin window should use.
+pub struct CropInfo {
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
 impl Store {
     pub fn new() -> Self {
         Self::default()
@@ -84,6 +91,14 @@ impl Store {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow!("crop {id} not found; take a new screenshot"))
+    }
+
+    /// Crop bytes plus pixel size, so window chrome can match the image.
+    pub fn crop_info(&self, id: &str) -> Result<CropInfo> {
+        let png = self.crop(id)?;
+        let decoded = image::load_from_memory(&png).map_err(|e| anyhow!("decode crop: {e}"))?;
+        let (width, height) = (decoded.width(), decoded.height());
+        Ok(CropInfo { png, width, height })
     }
 }
 
