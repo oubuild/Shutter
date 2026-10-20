@@ -4,7 +4,10 @@ import { Overlay } from "./routes/Overlay";
 import { Pin } from "./routes/Pin";
 import { Chat } from "./routes/Chat";
 import { Main, type Tab } from "./routes/Main";
-import "./styles/app.css";
+import "./styles/capture.css";
+// UnoCSS output: the antfu design layer + utilities used by the settings pane.
+// Loaded after app.css so utility classes win over the legacy element rules.
+import "virtual:uno.css";
 
 /**
  * One bundle, five window shapes. The Rust side opens every window with

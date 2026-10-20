@@ -7,7 +7,8 @@
 
 use crate::types::MonitorInfo;
 use anyhow::{anyhow, Result};
-use image::RgbaImage;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{ImageEncoder, RgbaImage};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -120,9 +121,23 @@ impl Store {
             .ok_or_else(|| anyhow!("monitor {monitor_id} is not part of this session"))?;
         std::fs::create_dir_all(dir)?;
         let path = dir.join(format!("frame-{}-{monitor_id}.png", session.id));
-        let mut buf = std::io::Cursor::new(Vec::new());
-        frame.write_to(&mut buf, image::ImageFormat::Png)?;
-        std::fs::write(&path, buf.into_inner())?;
+        let mut buf = Vec::new();
+        // Fast compression on purpose: this runs on the capture path, and the
+        // default PNG settings spend seconds on a 5MP frame in a debug build.
+        // The overlay only needs to decode it once, so a bigger file is cheaper
+        // than the encoder's search.
+        PngEncoder::new_with_quality(
+            &mut buf,
+            CompressionType::Fast,
+            FilterType::NoFilter,
+        )
+        .write_image(
+            frame.as_raw(),
+            frame.width(),
+            frame.height(),
+            image::ExtendedColorType::Rgba8,
+        )?;
+        std::fs::write(&path, buf)?;
         Ok(path)
     }
 }

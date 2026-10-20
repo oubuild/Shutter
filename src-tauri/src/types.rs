@@ -130,10 +130,19 @@ pub struct Settings {
     /// field existed) loading instead of falling back to all-defaults.
     #[serde(default = "default_true")]
     pub auto_save: bool,
+    /// Global capture hotkey, as a `global-hotkey` accelerator string
+    /// (`CmdOrControl+Shift+KeyA`). Registered by the backend; rebinding goes
+    /// through `save_settings_cmd`, which re-registers it.
+    #[serde(default = "default_capture_shortcut")]
+    pub capture_shortcut: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+pub fn default_capture_shortcut() -> String {
+    "CmdOrControl+Shift+KeyA".into()
 }
 
 impl Default for Settings {
@@ -145,6 +154,7 @@ impl Default for Settings {
             save_dir: None,
             copy_after_capture: true,
             auto_save: true,
+            capture_shortcut: default_capture_shortcut(),
         }
     }
 }

@@ -114,6 +114,7 @@ export function Toolbar(props: Props) {
         primaryBg: primary ? getComputedStyle(primary).backgroundColor : null,
         barColor: getComputedStyle(el).color,
         size: [el.offsetWidth, el.offsetHeight],
+        rect: [Math.round(el.getBoundingClientRect().left), Math.round(el.getBoundingClientRect().top)],
         buttons: el.querySelectorAll("button").length,
         // Icon-only means no button should have text content.
         textButtons: Array.from(el.querySelectorAll("button")).filter((b) =>

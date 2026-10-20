@@ -7,9 +7,11 @@
 
 import { useEffect, useState } from "react";
 import { api, errorText } from "../lib/ipc";
+import { formatAccelerator } from "../lib/shortcut";
 
 export function About() {
   const [dir, setDir] = useState<string | null>(null);
+  const [captureAccel, setCaptureAccel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -17,68 +19,85 @@ export function About() {
       .saveDirectory()
       .then(setDir)
       .catch((e) => setError(errorText(e)));
+    api
+      .getSettings()
+      .then((s) => setCaptureAccel(s.captureShortcut))
+      .catch(() => undefined);
   }, []);
 
   return (
-    <div className="about">
-      <div className="about-hero">
-        <div className="about-mark">S</div>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-6 py-5">
+      <div className="mb-4 flex items-center gap-3.5">
+        <div className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-primary-400 to-sky-400 text-xl font-700 text-white">
+          S
+        </div>
         <div>
-          <h1>Shutter</h1>
-          <div className="about-version">版本 0.1.0</div>
+          <h1 className="m-0 text-lg font-600 color-base">Shutter</h1>
+          <div className="text-mini color-faint">版本 0.1.0</div>
         </div>
       </div>
 
-      <p className="about-lead">
+      <p className="mb-5 mt-0 max-w-[56ch] text-compact leading-7 color-muted">
         常驻菜单栏的截图工具：⌘⇧A 框选，就地标注，然后复制、保存、贴图，
         或者交给视觉模型提取文字、翻译、解释。
       </p>
 
-      <section className="about-section">
-        <h2>文件位置</h2>
-        <div className="about-row">
-          <span className="about-label">截图保存</span>
-          <code className="about-path">{dir ?? error ?? "…"}</code>
+      <section className="border-t border-base py-3.5">
+        <h2 className="mb-2.5 mt-0 text-micro font-600 tracking-wider uppercase color-faint">
+          文件位置
+        </h2>
+        <div className="flex items-center gap-2.5 py-1 text-compact">
+          <span className="w-32 flex-none color-muted">截图保存</span>
+          <code className="min-w-0 flex-1 truncate font-mono text-mini color-faint">
+            {dir ?? error ?? "…"}
+          </code>
           <button
             type="button"
+            className="btn-action"
             onClick={() => dir && void api.openDirectory(dir).catch(() => undefined)}
             disabled={!dir}
           >
             打开
           </button>
         </div>
-        <div className="about-row">
-          <span className="about-label">配置与帧缓存</span>
-          <code className="about-path">~/Library/Application Support/Shutter</code>
+        <div className="flex items-center gap-2.5 py-1 text-compact">
+          <span className="w-32 flex-none color-muted">配置与帧缓存</span>
+          <code className="min-w-0 flex-1 truncate font-mono text-mini color-faint">
+            ~/Library/Application Support/Shutter
+          </code>
         </div>
-        <div className="about-row">
-          <span className="about-label">API Key</span>
-          <span className="about-note">保存在 macOS 钥匙串，不写入配置文件</span>
+        <div className="flex items-center gap-2.5 py-1 text-compact">
+          <span className="w-32 flex-none color-muted">API Key</span>
+          <span className="text-mini color-faint">保存在 macOS 钥匙串，不写入配置文件</span>
         </div>
       </section>
 
-      <section className="about-section">
-        <h2>快捷键</h2>
-        <div className="about-keys">
+      <section className="border-t border-base py-3.5">
+        <h2 className="mb-2.5 mt-0 text-micro font-600 tracking-wider uppercase color-faint">
+          快捷键
+        </h2>
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-5 gap-y-1">
           {[
-            ["⌘⇧A", "开始截图"],
+            [captureAccel ? formatAccelerator(captureAccel) : "⌘⇧A", "开始截图"],
             ["Esc", "取消截图 / 关闭预览"],
             ["Enter", "确认并复制"],
             ["⌘S", "确认并保存"],
             ["⌘Z", "撤销上一个标注"],
             ["1 – 9", "切换标注工具"],
           ].map(([key, label]) => (
-            <div key={key} className="about-key-row">
-              <kbd>{key}</kbd>
-              <span>{label}</span>
+            <div key={key} className="flex items-center gap-2.5 py-0.5 text-compact">
+              <kbd className="app-kbd flex-none">{key}</kbd>
+              <span className="color-muted">{label}</span>
             </div>
           ))}
         </div>
       </section>
 
-      <section className="about-section">
-        <h2>隐私</h2>
-        <p className="about-note">
+      <section className="border-t border-base py-3.5">
+        <h2 className="mb-2.5 mt-0 text-micro font-600 tracking-wider uppercase color-faint">
+          隐私
+        </h2>
+        <p className="text-mini leading-7 color-faint">
           只有点击 AI 动作时，当前选区的图片才会发往你在设置里配置的端点。
           没有遥测，没有自动更新，没有后台服务。
         </p>

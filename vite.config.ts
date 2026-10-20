@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import UnoCSS from "unocss/vite";
 
 // Tauri expects a fixed port and must not fall back to another one.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), UnoCSS()],
   clearScreen: false,
   server: {
     port: 5183,

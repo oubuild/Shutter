@@ -53,33 +53,46 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
 
   return (
     <div
-      className="preview-backdrop"
+      className="fixed inset-0 z-modal-backdrop flex items-center justify-center bg-black/60 p-6 backdrop-blur-2"
       onClick={onClose}
       role="presentation"
     >
-      <div className="preview-card" onClick={(e) => e.stopPropagation()} role="presentation">
-        <div className="preview-stage">
-          <img src={full ?? src ?? ""} alt={item.name} draggable={false} />
-          {error && <div className="preview-error">{error}</div>}
+      <div
+        className="flex max-h-full max-w-full flex-col overflow-hidden rounded-xl border border-base bg-base shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        role="presentation"
+      >
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-#0d0f13 p-3">
+          <img
+            className="block max-h-[calc(100vh-200px)] max-w-full object-contain"
+            src={full ?? src ?? ""}
+            alt={item.name}
+            draggable={false}
+          />
+          {error && <div className="p-3 text-mini text-error-300">{error}</div>}
         </div>
-        <footer className="preview-bar">
-          <div className="preview-meta">
-            <span className="preview-name">{item.name}</span>
-            <span className="preview-dims">
+        <footer className="flex flex-none items-center justify-between gap-4 border-t border-base px-3.5 py-2.5">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="truncate text-mini color-base">{item.name}</span>
+            <span className="font-mono text-micro tabular-nums color-faint">
               {item.width}×{item.height}
             </span>
           </div>
-          <div className="preview-actions">
-            <button type="button" onClick={onCopy}>
+          <div className="flex flex-none gap-2">
+            <button type="button" className="btn-action" onClick={onCopy}>
               复制
             </button>
-            <button type="button" onClick={onReveal}>
+            <button type="button" className="btn-action" onClick={onReveal}>
               在文件夹中显示
             </button>
-            <button type="button" className="danger" onClick={onDelete}>
+            <button
+              type="button"
+              className="btn-action text-error-600"
+              onClick={onDelete}
+            >
               删除
             </button>
-            <button type="button" className="primary" onClick={onClose}>
+            <button type="button" className="btn-primary" onClick={onClose}>
               关闭
             </button>
           </div>

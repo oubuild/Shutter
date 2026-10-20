@@ -117,16 +117,26 @@ pub fn resolve_in_dir(dir: &Path, candidate: &str) -> Result<PathBuf> {
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow!("不是有效的文件路径"))?;
 
-    // Reject anything with a directory component or traversal, even if it would
-    // resolve inside `dir` — the gallery only ever deals in bare file names.
-    if raw.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false)
-        || name != candidate
-        || !is_gallery_name(name)
-    {
+    if !is_gallery_name(name) {
         return Err(anyhow!("不是图库中的截图：{candidate}"));
     }
 
-    let path = dir.join(name);
+    // Two shapes are accepted, because the gallery list hands the UI absolute
+    // paths (it needs them for "reveal in Finder") while the UI may also send a
+    // bare file name. Anything else — a traversal, a relative subdirectory — is
+    // rejected before it touches the filesystem.
+    let path = if raw.is_absolute() {
+        // Containment is enforced below by canonicalising both sides, which
+        // also copes with a save directory configured with a trailing slash.
+        raw.to_path_buf()
+    } else {
+        if raw.parent().map(|p| !p.as_os_str().is_empty()).unwrap_or(false)
+            || name != candidate
+        {
+            return Err(anyhow!("不是图库中的截图：{candidate}"));
+        }
+        dir.join(name)
+    };
     // Resolve symlinks before touching anything: a symlink in the folder must
     // not redirect a delete outside it.
     let canonical_dir = dir

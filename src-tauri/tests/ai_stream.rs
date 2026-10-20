@@ -106,7 +106,13 @@ async fn streams_deltas_in_order() {
 
     let request = String::from_utf8_lossy(&seen.lock().unwrap()).to_string();
     assert!(request.contains("POST /chat/completions"), "got: {request}");
-    assert!(request.contains("authorization: bearer sk-test") || request.contains("Authorization: Bearer sk-test"));
+    // Header names are case-insensitive, and the casing on the wire depends on
+    // who writes them: reqwest emits lowercase, an HTTP proxy rewrites them to
+    // canonical form. Compare on a lowercased copy instead of enumerating both.
+    assert!(
+        request.to_lowercase().contains("authorization: bearer sk-test"),
+        "got: {request}"
+    );
     assert!(request.contains("\"model\":\"test-model\""));
     assert!(request.contains("data:image/png;base64,"), "image must be inlined");
     assert!(request.contains("\"stream\":true"));

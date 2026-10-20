@@ -40,23 +40,27 @@ export function Confirm({
   }, [onCancel, onConfirm]);
 
   return (
-    <div className="confirm-backdrop" onClick={onCancel} role="presentation">
+    <div
+      className="fixed inset-0 z-modal-backdrop flex items-center justify-center bg-black/45 p-6 backdrop-blur-2"
+      onClick={onCancel}
+      role="presentation"
+    >
       <div
-        className="confirm-card"
+        className="w-[340px] rounded-xl border border-base bg-base p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={title}
       >
-        <div className="confirm-title">{title}</div>
-        <div className="confirm-message">{message}</div>
-        <div className="confirm-actions">
-          <button type="button" onClick={onCancel}>
+        <div className="mb-2 text-compact font-600 color-base">{title}</div>
+        <div className="break-all text-mini leading-6 color-muted">{message}</div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" className="btn-action" onClick={onCancel}>
             {cancelLabel}
           </button>
           <button
             type="button"
-            className={danger ? "danger" : "primary"}
+            className={danger ? "btn-action text-error-600" : "btn-primary"}
             onClick={onConfirm}
             autoFocus
           >

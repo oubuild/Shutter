@@ -3,7 +3,7 @@
  * stays in Rust (only the thumbnail enters the webview) and answers stream in
  * over `ai://delta` / `ai://done`, matched by `requestId`.
  */
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   errorText,
@@ -36,17 +36,6 @@ const DEFAULT_LANG = "简体中文";
 /** Stay pinned only while the user is this close to the bottom. */
 const BOTTOM_SLACK = 80;
 
-const previewStyle: CSSProperties = {
-  display: "block", margin: "0 auto", maxWidth: "100%", maxHeight: 140,
-  objectFit: "contain", borderRadius: 8, border: "1px solid var(--border)",
-};
-const errorStyle: CSSProperties = { color: "var(--danger)" };
-const toastStyle: CSSProperties = { padding: "0 18px 8px", wordBreak: "break-all" };
-const barStyle: CSSProperties = {
-  padding: "10px 18px", borderBottom: "1px solid var(--border)",
-};
-const metaRowStyle: CSSProperties = { marginTop: 6 };
-const previewBoxStyle: CSSProperties = { flex: "0 0 auto", textAlign: "center" };
 
 export function Chat() {
   const initialCrop = new URLSearchParams(window.location.search).get("crop") ?? "";
@@ -233,43 +222,67 @@ export function Chat() {
   }
 
   return (
-    <div className="panel">
-      <header className="panel-header">
-        <div className="row">
-          <span className="panel-title">AI 助手</span>
-          <span className="status" title="当前模型">
+    <div className="flex h-full w-full flex-col bg-base text-compact color-base">
+      <header className="flex flex-none items-center justify-between gap-3 border-b border-base px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-compact font-600">AI 助手</span>
+          <span
+            className="rounded-full border border-base px-2 py-0.5 text-mini color-muted"
+            title="当前模型"
+          >
             {settings?.model ?? "…"}
           </span>
         </div>
-        <span className={busy ? "status" : "status ok"}>{busy ? "生成中…" : "就绪"}</span>
+        <span
+          className={`rounded-full border px-2 py-0.5 text-mini ${
+            busy
+              ? "border-base color-muted"
+              : "border-success-500/40 bg-success-500/12 text-success-700"
+          }`}
+        >
+          {busy ? "生成中…" : "就绪"}
+        </span>
       </header>
 
-      <div className="row" style={barStyle}>
+      <div className="flex items-center gap-2 border-b border-base px-4 py-2.5">
         {ACTIONS.map(({ action, label }) => (
           <button
             key={action}
+            className="btn-action"
             disabled={!canAsk || (action === "ask" && input.trim() === "")}
             onClick={() => start(action)}
           >
             {label}
           </button>
         ))}
-        <span style={{ flex: "1 1 auto" }} />
-        <button className="ghost" disabled={busy || messages.length === 0} onClick={clearLog}>
+        <span className="flex-1" />
+        <button
+          className="btn-text"
+          disabled={busy || messages.length === 0}
+          onClick={clearLog}
+        >
           清空
         </button>
       </div>
 
-      <div className="chat-log" ref={logRef} onScroll={handleScroll}>
+      <div className="flex flex-1 flex-col gap-3.5 overflow-y-auto p-4" ref={logRef} onScroll={handleScroll}>
         {preview !== null && (
-          <div style={previewBoxStyle}>
-            <img src={preview} alt="截图预览" style={previewStyle} />
+          <div className="flex-none text-center">
+            <img
+              className="mx-auto block max-h-[140px] max-w-full rounded-md border border-base object-contain"
+              src={preview}
+              alt="截图预览"
+            />
           </div>
         )}
         {cropId === "" ? (
-          <div className="chat-empty">{EMPTY_HINT}</div>
+          <div className="m-auto text-center text-compact leading-7 color-faint">
+            {EMPTY_HINT}
+          </div>
         ) : messages.length === 0 ? (
-          <div className="chat-empty">选择上方动作，或直接在下方提问。</div>
+          <div className="m-auto text-center text-compact leading-7 color-faint">
+            选择上方动作，或直接在下方提问。
+          </div>
         ) : (
           messages.map((message) => {
             const label = ACTIONS.find((a) => a.action === message.action)?.label;
@@ -279,25 +292,40 @@ export function Chat() {
               message.error === undefined &&
               message.text !== "";
             return (
-              <div key={message.id} className={`chat-msg ${message.role}`}>
-                {label !== undefined && <div className="chat-meta">{label}</div>}
+              <div
+                key={message.id}
+                className={`max-w-[92%] whitespace-pre-wrap break-words text-compact leading-7 ${
+                  message.role === "user"
+                    ? "self-end rounded-lg border border-primary-500/25 bg-primary-500/8 px-3 py-2"
+                    : "self-start color-base"
+                }`}
+              >
+                {label !== undefined && (
+                  <div className="mb-1 text-micro color-faint">{label}</div>
+                )}
                 {message.text === "" && message.streaming ? (
-                  <span style={{ color: "var(--text-faint)" }}>…</span>
+                  <span className="color-faint">…</span>
                 ) : (
                   <div>{message.text}</div>
                 )}
                 {message.error !== undefined && (
                   <>
-                    <div style={errorStyle}>{message.error}</div>
-                    <div className="row" style={metaRowStyle}>
-                      <button className="ghost" onClick={openSettings}>去设置</button>
+                    <div className="text-error-600">{message.error}</div>
+                    <div className="mt-1.5 flex gap-2">
+                      <button className="btn-text" onClick={openSettings}>
+                        去设置
+                      </button>
                     </div>
                   </>
                 )}
                 {canAct && (
-                  <div className="row" style={metaRowStyle}>
-                    <button className="ghost" onClick={() => copy(message.text)}>复制</button>
-                    <button className="ghost" onClick={saveImage}>保存图片</button>
+                  <div className="mt-1.5 flex gap-2">
+                    <button className="btn-text" onClick={() => copy(message.text)}>
+                      复制
+                    </button>
+                    <button className="btn-text" onClick={saveImage}>
+                      保存图片
+                    </button>
                   </div>
                 )}
               </div>
@@ -306,10 +334,13 @@ export function Chat() {
         )}
       </div>
 
-      {toast !== null && <div className="toast" style={toastStyle}>{toast}</div>}
+      {toast !== null && (
+        <div className="break-all px-4 pb-2 text-mini color-faint">{toast}</div>
+      )}
 
-      <div className="composer">
+      <div className="flex flex-none items-end gap-2 border-t border-base px-3.5 py-3">
         <textarea
+          className="min-h-10 max-h-35 flex-1 resize-y rounded-md border border-base bg-base px-2.5 py-2 text-compact outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
           value={input}
           disabled={cropId === ""}
           placeholder={cropId === "" ? EMPTY_HINT : "提问，Enter 发送，Shift+Enter 换行"}
@@ -321,7 +352,11 @@ export function Chat() {
             }
           }}
         />
-        <button className="primary" disabled={!canAsk || input.trim() === ""} onClick={() => start("ask")}>
+        <button
+          className="btn-primary"
+          disabled={!canAsk || input.trim() === ""}
+          onClick={() => start("ask")}
+        >
           发送
         </button>
       </div>

@@ -62,6 +62,26 @@ export type Settings = {
   saveDir: string | null;
   copyAfterCapture: boolean;
   autoSave: boolean;
+  /** Global capture hotkey as a `global-hotkey` accelerator string. */
+  captureShortcut: string;
+};
+
+/**
+ * Result of the settings page's "test connection" probe.
+ *
+ * The backend reports failures in-band (`ok: false` plus `detail`) rather than
+ * as a rejected invoke, so the UI can show the upstream message verbatim.
+ */
+export type ConnectionReport = {
+  ok: boolean;
+  /** Short human-readable verdict, already localised by Rust. */
+  detail: string;
+  /** Round trip of the deciding request, absent when it never got a response. */
+  latencyMs: number | null;
+  /** Which probe answered: `/models`, or a 1-token chat completion. */
+  via: "models" | "probe" | null;
+  /** Model ids the endpoint advertises; empty when it has no `/models` route. */
+  models: string[];
 };
 
 /** One screenshot on disk, as listed by the gallery. */
@@ -100,6 +120,17 @@ export const api = {
   setApiKey: (key: string) => invoke<void>("set_api_key", { key }),
   clearApiKey: () => invoke<void>("clear_api_key"),
   apiKeyStatus: () => invoke<boolean>("api_key_status"),
+  /**
+   * Probe a base URL + model with an optional not-yet-saved key.
+   *
+   * `apiKey: null` means "use the key already in the keychain", which is what
+   * lets the test button work without forcing the user to save first.
+   */
+  testConnection: (baseUrl: string, model: string, apiKey: string | null) =>
+    invoke<ConnectionReport>("test_connection", { baseUrl, model, apiKey }),
+  /** Model ids advertised by `GET {baseUrl}/models`. */
+  listModels: (baseUrl: string, apiKey: string | null) =>
+    invoke<string[]>("list_models", { baseUrl, apiKey }),
   copyText: (text: string) => invoke<void>("copy_text_to_clipboard", { text }),
   openSettings: () => invoke<void>("open_settings_window"),
   openMain: (tab?: "gallery" | "settings" | "about") =>
@@ -136,6 +167,9 @@ export const events = {
   /** Fired when the tray asks the main window to switch section. */
   onUiTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://tab", (e) => cb(e.payload)),
+  /** Fired when the tray wants a specific control focused (e.g. shortcuts). */
+  onUiFocus: (cb: (target: string) => void): Promise<UnlistenFn> =>
+    listen<string>("ui://focus", (e) => cb(e.payload)),
 };
 
 /** Errors from Rust arrive as strings; normalise them for display. */

@@ -80,6 +80,11 @@ pub fn reveal(win: &WebviewWindow) -> Result<()> {
     // A transparent borderless window can be attached to the window server with
     // the "not on screen" bit still set. Toggling alpha and ordering front is
     // what actually makes macOS composite it.
+    // The overlay is a borderless opaque-to-inputs window in an Accessory app:
+    // without an explicit activation the first click/keystroke only activates
+    // the window and is swallowed, which reads as "the toolbar does nothing".
+    crate::windows::focus_when_ready(win.clone());
+
     #[cfg(target_os = "macos")]
     {
         use tauri::Manager;

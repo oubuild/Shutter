@@ -12,7 +12,30 @@ use tauri::{AppHandle, Emitter, Manager, State};
 ///
 /// Creating the session also captures the frames, so the overlay window can be
 /// shown immediately without a second capture (which would flicker).
+/// Guards the capture pipeline: one session at a time.
+///
+/// A global hotkey can fire again while the previous capture is still tearing
+/// down its overlay and encoding frames. Two concurrent runs used to race on the
+/// `overlay-1` window label (one of them failed with "a webview with label
+/// `overlay-1` already exists") and on frame pruning.
+static CAPTURE_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        CAPTURE_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
+    use std::sync::atomic::Ordering;
+    if CAPTURE_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        anyhow::bail!("截图正在进行中");
+    }
+    let _guard = CaptureGuard;
+    let started = std::time::Instant::now();
     let store: State<'_, Arc<crate::session::Store>> = app.state();
 
     // Tear down any previous overlay BEFORE capturing, otherwise the new frame
@@ -20,11 +43,18 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     overlay::destroy_all(app);
     // Give macOS a beat to remove the windows from the window server.
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    log::info!("capture: teardown {:?}", started.elapsed());
 
     // Enumerate and capture in one synchronous step. `capture_all` returns
     // plain data only, so nothing `!Send` (an `xcap::Monitor` wraps a raw
     // `HMONITOR` on Windows) reaches the managed store; see `session::Session`.
-    let (monitors, frames) = crate::capture::capture_all()?;
+    let grabbed = std::time::Instant::now();
+    // Screen capture and PNG encoding are blocking calls; keep them off the
+    // async runtime so IPC and window events stay responsive meanwhile.
+    let (monitors, frames) = tokio::task::spawn_blocking(crate::capture::capture_all)
+        .await
+        .map_err(|e| anyhow::anyhow!("capture task failed: {e}"))??;
+    log::info!("capture: grab {:?}", grabbed.elapsed());
     if monitors.is_empty() {
         anyhow::bail!("没有检测到可用的显示器");
     }
@@ -33,10 +63,20 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     // overlay never races the capture.
     let session = store.begin(monitors.clone(), frames);
 
+    let encoded = std::time::Instant::now();
     let frame_dir = settings::app_dir()?.join("frames");
-    for info in &monitors {
-        store.write_frame_png(info.id, &frame_dir)?;
-    }
+    let frame_store = store.inner().clone();
+    let frame_monitors = monitors.clone();
+    let frame_dir_for_write = frame_dir.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        for info in &frame_monitors {
+            frame_store.write_frame_png(info.id, &frame_dir_for_write)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("frame writer failed: {e}"))??;
+    log::info!("capture: encode+publish {:?}", encoded.elapsed());
     crate::session::Store::prune_frames(&frame_dir, &session.id);
 
     for info in &monitors {
@@ -275,8 +315,23 @@ pub fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-pub fn save_settings_cmd(settings: Settings) -> std::result::Result<(), String> {
-    settings::save_settings(&settings).map_err(|e| format!("{e:#}"))
+pub fn save_settings_cmd(app: AppHandle, settings: Settings) -> std::result::Result<(), String> {
+    let previous = settings::load_settings();
+    settings::save_settings(&settings).map_err(|e| format!("{e:#}"))?;
+
+    // A hotkey only takes effect once the OS accepts it. If the new
+    // accelerator is invalid or already owned by another app, roll the file
+    // back so the stored settings always describe the live registration.
+    if let Err(e) = crate::register_capture_hotkey(&app, &settings.capture_shortcut) {
+        let _ = settings::save_settings(&previous);
+        let _ = crate::register_capture_hotkey(&app, &previous.capture_shortcut);
+        return Err(e);
+    }
+    // The tray row shows the accelerator; repaint it after a rebind.
+    if let Err(e) = windows::refresh_tray(&app) {
+        log::warn!("cannot refresh tray menu: {e}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -293,6 +348,43 @@ pub fn clear_api_key() -> std::result::Result<(), String> {
 #[tauri::command]
 pub fn api_key_status() -> bool {
     settings::has_api_key()
+}
+
+/// Probe an endpoint/model/key combination without saving anything.
+///
+/// `api_key` is the value currently typed into the settings form; `None` means
+/// "use the key already in the keychain". The key is never returned.
+#[tauri::command]
+pub async fn test_connection(
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+) -> crate::ai::ConnectionReport {
+    use crate::ai::{ConnectionReport, ProbeClient};
+
+    let key = match settings::resolve_api_key(api_key.as_deref()) {
+        Ok(key) => key,
+        Err(e) => return ConnectionReport::failure(format!("{e:#}")),
+    };
+    let client = match ProbeClient::new() {
+        Ok(client) => client,
+        Err(e) => return ConnectionReport::failure(format!("{e:#}")),
+    };
+    client.test_connection(&base_url, &model, &key).await
+}
+
+/// Model ids advertised by `GET {base_url}/models`.
+#[tauri::command]
+pub async fn list_models(
+    base_url: String,
+    api_key: Option<String>,
+) -> std::result::Result<Vec<String>, String> {
+    let key = settings::resolve_api_key(api_key.as_deref()).map_err(|e| format!("{e:#}"))?;
+    let client = crate::ai::ProbeClient::new().map_err(|e| format!("{e:#}"))?;
+    client
+        .list_models(&base_url, &key)
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -315,19 +407,37 @@ pub fn open_main_window(app: AppHandle, tab: Option<String>) -> std::result::Res
 
 /// Every screenshot in the save directory, newest first.
 #[tauri::command]
-pub fn list_gallery() -> std::result::Result<Vec<crate::types::GalleryItem>, String> {
-    let settings = settings::load_settings();
-    crate::gallery::list(&settings).map_err(|e| format!("{e:#}"))
+pub async fn list_gallery() -> std::result::Result<Vec<crate::types::GalleryItem>, String> {
+    // Directory scan + header decode touches the disk; keep it off the main
+    // thread so opening the gallery never freezes the window.
+    tokio::task::spawn_blocking(|| {
+        let settings = settings::load_settings();
+        crate::gallery::list(&settings)
+    })
+    .await
+    .map_err(|e| format!("gallery task failed: {e}"))?
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Thumbnail for one gallery item, as a PNG data URL so the webview can show it
 /// without the asset protocol or a second round trip per image.
 #[tauri::command]
-pub fn gallery_thumbnail(path: String) -> std::result::Result<String, String> {
-    let settings = settings::load_settings();
-    crate::gallery::thumbnail(&settings, &path)
-        .map(|png| output::data_url(&png))
-        .map_err(|e| format!("{e:#}"))
+pub async fn gallery_thumbnail(path: String) -> std::result::Result<String, String> {
+    // Decoding + resizing a full screenshot is the single most expensive call
+    // the grid makes; run it on the blocking pool, one task per thumbnail.
+    tokio::task::spawn_blocking(move || {
+        let settings = settings::load_settings();
+        crate::gallery::thumbnail(&settings, &path)
+            .map(|png| output::data_url(&png))
+            .map_err(|e| {
+                // The grid falls back to a placeholder per item; log the reason
+                // so a broken thumbnail is diagnosable from the terminal.
+                log::warn!("thumbnail failed for {path}: {e:#}");
+                format!("{e:#}")
+            })
+    })
+    .await
+    .map_err(|e| format!("thumbnail task failed: {e}"))?
 }
 
 /// Full-resolution PNG of one gallery item as a data URL.
@@ -335,11 +445,15 @@ pub fn gallery_thumbnail(path: String) -> std::result::Result<String, String> {
 /// Used for the preview overlay and for copying to the clipboard: the thumbnail
 /// is deliberately small, so neither may reuse it.
 #[tauri::command]
-pub fn gallery_full_image(path: String) -> std::result::Result<String, String> {
-    let settings = settings::load_settings();
-    crate::gallery::read_png(&settings, &path)
-        .map(|png| output::data_url(&png))
-        .map_err(|e| format!("{e:#}"))
+pub async fn gallery_full_image(path: String) -> std::result::Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let settings = settings::load_settings();
+        crate::gallery::read_png(&settings, &path)
+            .map(|png| output::data_url(&png))
+            .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("full image task failed: {e}"))?
 }
 
 /// Delete one screenshot. The path is re-validated in Rust: the webview only

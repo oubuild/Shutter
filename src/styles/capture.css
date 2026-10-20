@@ -1,0 +1,453 @@
+/* Capture-surface styles.
+ *
+ * This is the only hand-written stylesheet left. The overlay, the pinned image
+ * and the annotation toolbar float above a frozen screenshot inside transparent,
+ * borderless windows; their geometry is calibrated against the reference UI down
+ * to the pixel, and their canvases are layered by z-index rather than by normal
+ * flow. They are not part of the antfu/UnoCSS design system and are deliberately
+ * kept out of it, so a utility refactor can never nudge the crop border by a
+ * pixel.
+ *
+ * Everything else in the app (main window, gallery, about, chat, dialogs) is
+ * styled with UnoCSS utilities and the @antfu/design token layer.
+ */
+
+:root {
+  --bg: #16181d;
+  --bg-elevated: #1e2128;
+  --border: #2c313b;
+  --border-strong: #3a4150;
+  --text: #e6e9ef;
+  --text-dim: #98a0ae;
+  --text-faint: #6b7381;
+  --accent: #007aff;
+  --shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
+}
+
+/* ---------- capture chrome keeps a dark token set ----------
+   The overlay and pinned image float over the frozen screen, where a light
+   panel would be unusable. Scoping the tokens here means the light theme above
+   can own the windows without leaking into the capture surfaces. */
+.overlay-root,
+.pin-root {
+  --bg: #16181d;
+  --bg-elevated: #1e2128;
+  --border: #2c313b;
+  --border-strong: #3a4150;
+  --text: #e6e9ef;
+  --text-dim: #98a0ae;
+  --text-faint: #6b7381;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.55;
+}
+
+/* ---------- pin ---------- */
+
+.pin-root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: transparent;
+  overflow: hidden;
+}
+
+.pin-root img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  -webkit-user-drag: none;
+}
+
+.pin-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  background: rgba(22, 24, 29, 0.88);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  backdrop-filter: blur(12px);
+}
+
+.pin-root:hover .pin-toolbar {
+  opacity: 1;
+}
+
+.pin-toolbar button {
+  border: none;
+  background: transparent;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.pin-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 3px 9px;
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.pin-root:hover .pin-hint {
+  opacity: 1;
+}
+
+/* ---------- overlay ---------- */
+
+.overlay-root {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.overlay-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  z-index: 0;
+}
+
+/* Background image lives on a plain div: Safari sometimes refuses to paint a
+   decoded <img> inside a transparent, borderless window on first frame. */
+.overlay-stage-host {
+  position: absolute;
+  inset: 0;
+  background-position: 0 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Konva sits above the frozen frame but below the chrome. */
+.overlay-root canvas {
+  position: absolute !important;
+  inset: 0;
+  z-index: 1;
+}
+
+.overlay-dim {
+  position: absolute;
+  inset: 0;
+  /* 30% black, matching the reference mask (#0000004d). */
+  background: rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.overlay-box {
+  position: absolute;
+  border: 1px solid #fff;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Dashed inner ring, exactly as the reference draws the crop border. */
+.overlay-box::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px dashed #000;
+  pointer-events: none;
+}
+
+.overlay-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.overlay-size {
+  position: absolute;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: #282d32;
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 4;
+}
+
+.overlay-toast {
+  position: fixed;
+  color: #fff;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  color: #fff;
+  background: rgba(17, 20, 26, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 20;
+  animation: toast-in 200ms ease, toast-out 300ms ease 2.2s forwards;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes toast-out {
+  to { opacity: 0; }
+}
+
+.overlay-loading {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 13px;
+  background: rgba(17, 20, 26, 0.9);
+  padding: 10px 18px;
+  border-radius: 8px;
+  z-index: 30;
+}
+
+.overlay-menu {
+  position: fixed;
+  color: var(--text);
+  min-width: 132px;
+  padding: 5px;
+  background: rgba(22, 24, 29, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.overlay-menu button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-size: 12.5px;
+}
+
+.overlay-menu button:hover {
+  background: var(--accent);
+}
+
+.overlay-menu .sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+/* ---------- toolbar ----------
+   Metrics measured from the reference UI: 44px bar, 8px radius, #2c2c2c on a
+   1px rgba(0,0,0,.15) border, 36px hit targets, 8px gaps, #1b77ff for the
+   selected tool. Kept as tokens so light mode is a one-line swap. */
+
+.cap-toolbar {
+  --bar-bg: #2c2c2c;
+  --bar-border: rgba(0, 0, 0, 0.15);
+  --bar-fg: #ffffff;
+  --bar-hover: rgba(255, 255, 255, 0.08);
+  --bar-active: rgba(255, 255, 255, 0.08);
+  --bar-accent: #1b77ff;
+  --bar-divider: rgba(255, 255, 255, 0.12);
+
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 6px;
+  color: var(--bar-fg);
+  background: var(--bar-bg);
+  border: 1px solid var(--bar-border);
+  border-radius: 8px;
+  box-sizing: border-box;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  z-index: 10;
+}
+
+.cap-tools {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+/* 32x32 targets keep the reference's 8px radius and 44px bar while fitting
+   twenty controls without the bar growing past a third of the screen. */
+.cap-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  line-height: 1;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--bar-fg);
+}
+
+.cap-icon:hover:not(:disabled) {
+  background: var(--bar-hover);
+}
+
+.cap-icon.active {
+  background: var(--bar-active);
+  color: var(--bar-accent);
+}
+
+.cap-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--bar-divider);
+  margin: 0 2px;
+  flex: 0 0 auto;
+}
+
+.cap-swatches {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.cap-color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+}
+
+.cap-palette {
+  position: absolute;
+  top: 34px;
+  left: -8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 148px;
+  padding: 12px;
+  background: #2c2c2c;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
+  z-index: 12;
+}
+
+.cap-dot {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: opacity 0.1s;
+}
+
+.cap-dot:hover {
+  opacity: 0.9;
+}
+
+.cap-dot.active {
+  border-color: #fff;
+}
+
+.cap-width {
+  width: 52px;
+  accent-color: var(--bar-accent);
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.cap-width::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.cap-width::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+/* The confirm action is the only filled control in the bar. */
+.cap-icon.primary {
+  background: var(--bar-accent);
+  color: #fff;
+}
+
+.cap-icon.primary:hover:not(:disabled) {
+  background: #2f83ff;
+}
+
+.cap-icon:disabled {
+  color: rgba(255, 255, 255, 0.35);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+/* Icons are inline SVG; keep them optically centred in the 36px target. */
+.cap-icon svg {
+  display: block;
+  pointer-events: none;
+}
+
+/* ---------- selection chrome ---------- */
+
+/* Handles and border follow the reference: 10px white dots with a 1px black
+   ring, so they read on both light and dark wallpaper. */
+.overlay-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  background: #fff;
+  border: 1px solid #000;
+  border-radius: 50%;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 4;
+}
+

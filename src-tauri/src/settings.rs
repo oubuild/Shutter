@@ -109,6 +109,18 @@ pub fn has_api_key() -> bool {
     load_api_key().is_ok()
 }
 
+/// The key to use for a request that may carry an unsaved one.
+///
+/// The settings page needs to test a key the user has typed but not yet
+/// committed to the keychain; everywhere else passes `None` and gets the stored
+/// key. The value never travels back to the webview either way.
+pub fn resolve_api_key(pending: Option<&str>) -> Result<String> {
+    match pending.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => Ok(key.to_string()),
+        None => load_api_key(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
