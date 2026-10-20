@@ -27,8 +27,56 @@ pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f6
     Ok(win)
 }
 
+/// Open (or refocus) the main window: gallery, settings and about in one shell.
+///
+/// `tab` selects the initial section (`gallery` / `settings` / `about`). When the
+/// window already exists it is focused and asked to switch tabs through
+/// `ui://tab` rather than being recreated, which keeps the gallery scroll
+/// position and avoids a visible reload.
+pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        let _ = win.unminimize();
+        use tauri::Emitter;
+        let _ = win.emit("ui://tab", tab);
+        return Ok(win);
+    }
+
+    let mut builder = WebviewWindowBuilder::new(
+        app,
+        "main",
+        WebviewUrl::App(format!("index.html?view=main&tab={tab}").into()),
+    )
+    .title("Shutter")
+    .inner_size(1080.0, 720.0)
+    .min_inner_size(760.0, 520.0)
+    .resizable(true);
+
+    // The rounded card is drawn by the webview, so the native frame has to go.
+    // Only macOS gets the transparent variant: a transparent undecorated window
+    // on Windows needs extra compositor setup and renders with a black
+    // background when it is missing, which is worse than a plain frame.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .decorations(false)
+            .transparent(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            // Inset the traffic lights so they sit inside the card and line up
+            // with the 52px header row.
+            .traffic_light_position(tauri::LogicalPosition::new(18.0, 20.0));
+    }
+
+    let win = builder.build()?;
+
+    Ok(win)
+}
+
+/// Open the settings section of the main window.
 pub fn open_settings(app: &AppHandle) -> Result<()> {
-    open(app, "settings", "settings", "Shutter 设置", 620.0, 640.0)?;
+    open_main(app, "settings")?;
     Ok(())
 }
 
@@ -61,6 +109,7 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
 
 pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "截图  ⌘⇧A", true, None::<&str>)?;
+    let gallery = MenuItem::with_id(app, "gallery", "打开 Shutter", true, None::<&str>)?;
     let chat = MenuItem::with_id(app, "chat", "AI 助手", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Shutter", true, None::<&str>)?;
@@ -70,18 +119,20 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
             &capture,
             &chat,
             &PredefinedMenuItem::separator(app)?,
+            &gallery,
             &settings,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
     )?;
 
+    // The tray must use the monochrome template icon, not the 512px app icon:
+    // macOS tints template images for light/dark menu bars, and the app icon
+    // would render oversized and coloured.
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+        .expect("bundled tray icon");
     TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
-            // Fall back to the bundled tray png if the app icon is unavailable.
-            tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
-                .expect("bundled tray icon")
-        }))
+        .icon(tray_icon)
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -96,6 +147,9 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "chat" => {
                 let _ = open_chat(app, None, None);
+            }
+            "gallery" => {
+                let _ = open_main(app, "gallery");
             }
             "settings" => {
                 let _ = open_settings(app);

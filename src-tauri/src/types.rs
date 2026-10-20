@@ -124,6 +124,16 @@ pub struct Settings {
     pub translate_lang: String,
     pub save_dir: Option<String>,
     pub copy_after_capture: bool,
+    /// Persist every finished capture to the gallery, not only on ⌘S.
+    ///
+    /// `#[serde(default)]` keeps old `settings.json` files (written before this
+    /// field existed) loading instead of falling back to all-defaults.
+    #[serde(default = "default_true")]
+    pub auto_save: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -134,8 +144,22 @@ impl Default for Settings {
             translate_lang: "简体中文".into(),
             save_dir: None,
             copy_after_capture: true,
+            auto_save: true,
         }
     }
+}
+
+/// One screenshot on disk, as shown in the gallery.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryItem {
+    pub path: String,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: u64,
+    /// Seconds since the Unix epoch, from the file's mtime.
+    pub created_at: i64,
 }
 
 /// Well-known OpenAI-compatible endpoints offered in the settings UI.

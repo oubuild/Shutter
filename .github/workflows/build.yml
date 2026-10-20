@@ -1,0 +1,185 @@
+name: build
+
+# Three-platform desktop build: macOS (arm64 + x64), Windows x64, Linux x64.
+#
+# - Every push to main and every PR runs the full matrix, so a platform that
+#   stops compiling is caught before release. Bundles are kept as workflow
+#   artifacts only.
+# - A `v*` tag additionally publishes a GitHub Release with the installers
+#   attached. Nothing is uploaded to a release from a branch build.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight build. Tag builds are
+# never cancelled: a half-uploaded release is worse than a slow one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Tauri's CLI reads this to decide whether it may prompt.
+  CI: true
+
+jobs:
+  # The release is created once, up front. If each matrix job let tauri-action
+  # create it, four jobs would race: all four see "no release for this tag" and
+  # all four create one, leaving duplicate drafts.
+  release:
+    name: Create draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - name: Create or reuse the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # `gh` resolves the repo from the git remote, and this job deliberately
+          # does not check the code out, so the name has to be passed explicitly.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists, reusing it"
+          else
+            gh release create "$tag" \
+              --draft \
+              --title "Shutter $tag" \
+              --notes "See the assets below for the installers.
+
+          | Platform | File |
+          | --- | --- |
+          | macOS (Apple Silicon) | \`Shutter_*_aarch64.dmg\` |
+          | macOS (Intel) | \`Shutter_*_x64.dmg\` |
+          | Windows | \`Shutter_*_x64-setup.exe\`, \`Shutter_*_x64_en-US.msi\` |
+          | Linux | \`Shutter_*_amd64.deb\`, \`Shutter_*_amd64.AppImage\` |
+
+          The macOS builds are signed ad-hoc, not notarized. On first launch use
+          System Settings → Privacy & Security → Open Anyway."
+          fi
+          id=$(gh release view "$tag" --json databaseId --jq .databaseId)
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: release
+    # Branch and PR builds have no release job; only run after it when it ran.
+    if: always() && !cancelled() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write # tauri-action uploads assets to the release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both macOS targets are cross-compiled on the arm64 runner. Intel
+          # macOS images only exist as paid larger runners, and Tauri supports
+          # `--target x86_64-apple-darwin` from arm64 out of the box.
+          - name: macOS arm64
+            platform: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS x64
+            platform: macos-15
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Windows x64
+            platform: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: Linux x64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm must be installed before setup-node: the node cache key is derived
+      # from `pnpm store path`, which does not exist yet otherwise.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.6.0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache per target: the four jobs build four different dependency
+          # graphs, and a shared key would evict itself on every run.
+          key: ${{ matrix.target }}
+          workspaces: src-tauri -> target
+
+      # xcap needs the X11/Wayland capture stack, tauri needs webkit2gtk and
+      # GTK, keyring needs D-Bus, and pipewire-sys runs pkg-config for
+      # libpipewire/libspa at build time.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl wget file patchelf \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libdbus-1-dev \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxcb-render0-dev \
+            libwayland-dev \
+            libegl1-mesa-dev \
+            libdrm-dev libgbm-dev \
+            libpipewire-0.3-dev libspa-0.2-dev \
+            libclang-dev
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck frontend
+        run: pnpm typecheck
+
+      - name: Build and bundle
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc signing. Apple Silicon refuses to run unsigned arm64
+          # binaries, and an unsigned bundle also fails Gatekeeper less
+          # gracefully. There is no Developer ID here, so this is the honest
+          # maximum; it does not make the app notarized.
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          # Set only for tag builds. When empty, tauri-action skips release
+          # uploads entirely and only produces workflow artifacts.
+          releaseId: ${{ needs.release.outputs.release_id }}
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # No updater plugin is configured, so a latest.json would only be
+          # noise in the release (and an empty one at that).
+          uploadUpdaterJson: false
+          uploadWorkflowArtifacts: true
+          # Must be unique per artifact: a macOS job emits both a .app and a
+          # .dmg, and a constant name would collide between the two.
+          workflowArtifactNamePattern: "shutter-${{ matrix.target }}-[bundle]"

@@ -28,15 +28,15 @@ pub fn copy_text(text: &str) -> Result<()> {
 
 /// Write a PNG into `dir` with a timestamped name, returning the path.
 ///
-/// The name is `cap-photo-YYYYMMDD-HHMMSS.png`, with a numeric suffix if two
+/// The name is `shutter-YYYYMMDD-HHMMSS.png`, with a numeric suffix if two
 /// captures land in the same second.
 pub fn save_png(png: &[u8], dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let mut path = dir.join(format!("cap-photo-{stamp}.png"));
+    let mut path = dir.join(format!("shutter-{stamp}.png"));
     let mut n = 1;
     while path.exists() {
-        path = dir.join(format!("cap-photo-{stamp}-{n}.png"));
+        path = dir.join(format!("shutter-{stamp}-{n}.png"));
         n += 1;
         if n > 999 {
             return Err(anyhow!("too many captures in the same second"));
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn save_png_creates_unique_names() {
-        let dir = std::env::temp_dir().join(format!("cap-photo-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("shutter-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let png = {
             let img = RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));

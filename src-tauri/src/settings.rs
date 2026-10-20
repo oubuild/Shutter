@@ -4,14 +4,14 @@ use crate::types::Settings;
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 
-const KEYCHAIN_SERVICE: &str = "cap-photo";
+const KEYCHAIN_SERVICE: &str = "dev.oubuild.shutter";
 const KEYCHAIN_ACCOUNT: &str = "deepseek-api-key";
 
 /// Where the app keeps its own files.
 pub fn app_dir() -> Result<PathBuf> {
     let base = dirs::data_dir()
         .ok_or_else(|| anyhow!("no application support directory"))?
-        .join("cap-photo");
+        .join("Shutter");
     std::fs::create_dir_all(&base).with_context(|| format!("create {}", base.display()))?;
     Ok(base)
 }
@@ -51,16 +51,25 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
     Ok(())
 }
 
-/// Default directory for saved screenshots.
+/// Default directory for saved screenshots, created on demand.
 pub fn save_dir(settings: &Settings) -> Result<PathBuf> {
-    let dir = match &settings.save_dir {
-        Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
-        _ => dirs::picture_dir()
-            .ok_or_else(|| anyhow!("no Pictures directory"))?
-            .join("cap-photo"),
-    };
+    let dir = save_dir_path(settings)?;
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     Ok(dir)
+}
+
+/// Same as [`save_dir`] but never touches the filesystem.
+///
+/// The gallery uses this: listing an empty gallery must not create the folder
+/// as a side effect, and a read-only location should report an empty list
+/// rather than a permission error.
+pub fn save_dir_path(settings: &Settings) -> Result<PathBuf> {
+    match &settings.save_dir {
+        Some(dir) if !dir.trim().is_empty() => Ok(PathBuf::from(dir)),
+        _ => Ok(dirs::picture_dir()
+            .ok_or_else(|| anyhow!("no Pictures directory"))?
+            .join("Shutter")),
+    }
 }
 
 fn entry() -> Result<keyring::Entry> {

@@ -10,10 +10,10 @@
 //! They assert geometry and pixel identity rather than visual content, so they
 //! stay meaningful on any wallpaper.
 
-use cap_photo_lib::capture;
-use cap_photo_lib::compose;
-use cap_photo_lib::output;
-use cap_photo_lib::types::Rect;
+use shutter_lib::capture;
+use shutter_lib::compose;
+use shutter_lib::output;
+use shutter_lib::types::Rect;
 
 /// Every display reports consistent logical/physical dimensions.
 #[test]
@@ -137,7 +137,7 @@ fn overlay_is_baked_into_the_saved_png() {
     let merged = compose::merge_overlay(&cropped, Some(&overlay));
     let png = compose::to_png(&merged).expect("png");
 
-    let dir = std::env::temp_dir().join(format!("cap-photo-e2e-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("shutter-e2e-{}", std::process::id()));
     let path = output::save_png(&png, &dir).expect("save");
     println!("saved {}", path.display());
 

@@ -1,9 +1,10 @@
-//! cap-photo — macOS screenshot + annotation + pin + DeepSeek vision assistant.
+//! Shutter — macOS screenshot + annotation + pin + DeepSeek vision assistant.
 
 pub mod ai;
 pub mod capture;
 pub mod commands;
 pub mod compose;
+pub mod gallery;
 pub mod output;
 pub mod overlay;
 pub mod pin;
@@ -40,10 +41,14 @@ pub fn run() {
         )
         .manage(Arc::new(session::Store::new()))
         .setup(|app| {
-            // Menu bar app: no dock icon, no default window.
+            // Menu-bar agent: no Dock icon, no app menu.
+            //
+            // Both halves are required. `LSUIElement` in Info.plist stops the
+            // icon from flashing during launch, but Tauri resets the policy to
+            // Regular once it starts, so this call is what actually keeps the
+            // app out of the Dock.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             windows::set_tray(app.handle())?;
 
             let shortcut = Shortcut::new(
@@ -119,6 +124,15 @@ pub fn run() {
             commands::api_key_status,
             commands::copy_text_to_clipboard,
             commands::open_settings_window,
+            commands::open_main_window,
+            commands::list_gallery,
+            commands::gallery_thumbnail,
+            commands::gallery_full_image,
+            commands::delete_gallery_item,
+            commands::save_directory,
+            commands::reveal_path,
+            commands::open_directory,
+            commands::choose_directory,
             commands::open_chat_window,
             commands::close_pin,
             commands::save_crop,
@@ -126,7 +140,7 @@ pub fn run() {
             commands::pin_crop,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building cap-photo")
+        .expect("error while building Shutter")
         .run(|_app, event| {
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 // Closing the last window must not quit a menu-bar app.

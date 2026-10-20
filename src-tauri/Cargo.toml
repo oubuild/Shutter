@@ -1,5 +1,5 @@
 [package]
-name = "cap-photo"
+name = "shutter"
 version = "0.1.0"
 description = "Shutter — macOS screenshot, annotation, pin, and vision-assistant tool"
 authors = ["Oubuild"]
@@ -7,7 +7,7 @@ edition = "2021"
 rust-version = "1.90"
 
 [lib]
-name = "cap_photo_lib"
+name = "shutter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -27,13 +27,27 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 xcap = "0.9"
 image = { version = "0.25", features = ["png", "jpeg"] }
 arboard = { version = "3", features = ["image-data"] }
-keyring = { version = "3", features = ["apple-native"] }
 base64 = "0.22"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 dirs = "6"
 log = "0.4"
 env_logger = "0.11"
+
+# The API key lives in the OS credential store. `keyring` picks its backend at
+# compile time from these features, and the backend is per-platform, so each
+# target enables exactly one. A platform without a backend silently falls back
+# to keyring's in-memory mock, which would lose the key on every restart.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+# Secret Service over D-Bus (GNOME Keyring / KWallet). `crypto-rust` keeps the
+# session key exchange pure-Rust so the build needs no OpenSSL headers.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [features]
 default = ["custom-protocol"]

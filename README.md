@@ -6,7 +6,6 @@ macOS 截图 · 标注 · 贴图 · 多模型视觉助手。
 或者直接丢给视觉模型提取文字、翻译、解释。
 
 > 仓库名与对外名称是 **Shutter**；包名、bundle identifier、钥匙串 service 等内部标识
-> 仍为 `cap-photo`（`dev.oubuild.cap-photo`），以便与已有安装和配置保持兼容。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platform: macOS 12+](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey)
@@ -16,7 +15,7 @@ macOS 截图 · 标注 · 贴图 · 多模型视觉助手。
 
 - **截图**：`⌘⇧A` 或点击菜单栏图标；多显示器各自一个透明覆层，选区可整体拖动、八向手柄缩放
 - **标注**：矩形 / 椭圆 / 箭头 / 画笔 / 马赛克 / 文字 / 高亮 / 序号 / 取色，`⌘Z` 撤销
-- **输出**：复制到剪贴板、保存到 `~/Pictures/cap-photo/`、贴图置顶（拖动移动、滚轮缩放、双击关闭）
+- **输出**：复制到剪贴板、保存到 `~/Pictures/Shutter/`、贴图置顶（拖动移动、滚轮缩放、双击关闭）
 - **AI**：提取文字 / 翻译 / 解释 / 自由提问，流式返回，回答可一键复制
 - **任意模型**：任何兼容 OpenAI Chat Completions 且接受 `image_url` 的端点，内置常用预设
 
@@ -35,7 +34,7 @@ pnpm app:build      # 打包 .app / .dmg 到 src-tauri/target/release/bundle/
 
 首次运行：
 
-1. 系统设置 → 隐私与安全性 → **屏幕录制**，勾选 Shutter（cap-photo）
+1. 系统设置 → 隐私与安全性 → **屏幕录制**，勾选 Shutter
 2. 菜单栏图标 → **设置…**，填入服务地址 / 模型 / API Key
 3. `⌘⇧A` 截图
 
@@ -65,8 +64,8 @@ pnpm app:build      # 打包 .app / .dmg 到 src-tauri/target/release/bundle/
 
 ## 隐私
 
-- **API Key 存在 macOS 钥匙串**（service `cap-photo`），不写入配置文件，前端拿不到
-- 截图帧与设置存放在 `~/Library/Application Support/cap-photo/`，新一次截图会清理上一帧
+- **API Key 存在 macOS 钥匙串**（service `dev.oubuild.shutter`），不写入配置文件，前端拿不到
+- 截图帧与设置存放在 `~/Library/Application Support/Shutter/`，新一次截图会清理上一帧
 - 只有点击 AI 动作时，当前选区的 PNG 才会发往你配置的端点；除此之外没有网络请求
 - 无遥测、无自动更新、无后台服务
 

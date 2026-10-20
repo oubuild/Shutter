@@ -78,6 +78,12 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
 pub fn debug_open_view(app: AppHandle, view: String) -> std::result::Result<(), String> {
     match view.as_str() {
         "settings" => windows::open_settings(&app).map_err(|e| format!("{e:#}")),
+        "gallery" | "main" => windows::open_main(&app, "gallery")
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}")),
+        "about" => windows::open_main(&app, "about")
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}")),
         "chat" => windows::open_chat(&app, None, None).map_err(|e| format!("{e:#}")),
         other => Err(format!("unknown view {other}")),
     }
@@ -187,11 +193,19 @@ async fn do_confirm(
     let mut message = None;
     let mut saved_path = None;
 
-    if action == CaptureAction::Save || action == CaptureAction::Pin {
+    // Every capture lands in the gallery by default so the list is a record of
+    // what was actually taken, not just what was explicitly saved. ⌘S/Pin imply
+    // a save regardless of the setting.
+    let explicit_save = action == CaptureAction::Save || action == CaptureAction::Pin;
+    if explicit_save || settings.auto_save {
         let dir = settings::save_dir(&settings)?;
         let path = output::save_png(&png, &dir)?;
         saved_path = Some(path.display().to_string());
-        message = Some(format!("已保存到 {}", path.display()));
+        message = Some(if explicit_save {
+            format!("已保存到 {}", path.display())
+        } else {
+            "已存入图库".to_string()
+        });
         if action == CaptureAction::Pin {
             pin::scope_path(&app, &path.display().to_string());
         }
@@ -288,6 +302,123 @@ pub fn copy_text_to_clipboard(text: String) -> std::result::Result<(), String> {
 #[tauri::command]
 pub fn open_settings_window(app: AppHandle) -> std::result::Result<(), String> {
     windows::open_settings(&app).map_err(|e| format!("{e:#}"))
+}
+
+/// Open the main window (gallery + settings + about) on the requested tab.
+#[tauri::command]
+pub fn open_main_window(app: AppHandle, tab: Option<String>) -> std::result::Result<(), String> {
+    windows::open_main(&app, tab.as_deref().unwrap_or("gallery"))
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Every screenshot in the save directory, newest first.
+#[tauri::command]
+pub fn list_gallery() -> std::result::Result<Vec<crate::types::GalleryItem>, String> {
+    let settings = settings::load_settings();
+    crate::gallery::list(&settings).map_err(|e| format!("{e:#}"))
+}
+
+/// Thumbnail for one gallery item, as a PNG data URL so the webview can show it
+/// without the asset protocol or a second round trip per image.
+#[tauri::command]
+pub fn gallery_thumbnail(path: String) -> std::result::Result<String, String> {
+    let settings = settings::load_settings();
+    crate::gallery::thumbnail(&settings, &path)
+        .map(|png| output::data_url(&png))
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Full-resolution PNG of one gallery item as a data URL.
+///
+/// Used for the preview overlay and for copying to the clipboard: the thumbnail
+/// is deliberately small, so neither may reuse it.
+#[tauri::command]
+pub fn gallery_full_image(path: String) -> std::result::Result<String, String> {
+    let settings = settings::load_settings();
+    crate::gallery::read_png(&settings, &path)
+        .map(|png| output::data_url(&png))
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Delete one screenshot. The path is re-validated in Rust: the webview only
+/// ever sends a bare file name that must live inside the save directory.
+#[tauri::command]
+pub fn delete_gallery_item(path: String) -> std::result::Result<(), String> {
+    let settings = settings::load_settings();
+    crate::gallery::delete(&settings, &path).map_err(|e| format!("{e:#}"))
+}
+
+/// Resolved save directory, so the UI can show where files actually go.
+#[tauri::command]
+pub fn save_directory() -> std::result::Result<String, String> {
+    let settings = settings::load_settings();
+    settings::save_dir(&settings)
+        .map(|dir| dir.display().to_string())
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Show a path in Finder/Explorer. Wraps the opener plugin so the frontend does
+/// not need its own permission scope for arbitrary paths.
+#[tauri::command]
+pub fn reveal_path(app: AppHandle, path: String) -> std::result::Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| format!("{e}"))
+}
+
+/// Open a directory in the system file manager.
+#[tauri::command]
+pub fn open_directory(app: AppHandle, path: String) -> std::result::Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(&path, None::<&str>)
+        .map_err(|e| format!("{e}"))
+}
+
+/// Ask the user for a directory using the system's native picker.
+///
+/// Implemented with the OS tooling instead of a dialog plugin: adding a crate
+/// requires network access this project's build environment does not have.
+#[tauri::command]
+pub fn choose_directory() -> std::result::Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"POSIX path of (choose folder with prompt "选择保存截图的目录")"#;
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|e| format!("无法打开目录选择器：{e}"))?;
+        if !output.status.success() {
+            // A non-zero exit is the user cancelling, which is not an error.
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = "\
+Add-Type -AssemblyName System.Windows.Forms; \
+$d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }";
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .output()
+            .map_err(|e| format!("无法打开目录选择器：{e}"))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("当前平台不支持目录选择".to_string())
+    }
 }
 
 /// Open the AI window, optionally bound to an existing crop.

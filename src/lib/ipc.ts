@@ -61,6 +61,18 @@ export type Settings = {
   translateLang: string;
   saveDir: string | null;
   copyAfterCapture: boolean;
+  autoSave: boolean;
+};
+
+/** One screenshot on disk, as listed by the gallery. */
+export type GalleryItem = {
+  path: string;
+  name: string;
+  width: number;
+  height: number;
+  bytes: number;
+  /** Seconds since the Unix epoch, from the file's mtime. */
+  createdAt: number;
 };
 
 export const api = {
@@ -90,6 +102,19 @@ export const api = {
   apiKeyStatus: () => invoke<boolean>("api_key_status"),
   copyText: (text: string) => invoke<void>("copy_text_to_clipboard", { text }),
   openSettings: () => invoke<void>("open_settings_window"),
+  openMain: (tab?: "gallery" | "settings" | "about") =>
+    invoke<void>("open_main_window", { tab: tab ?? null }),
+  listGallery: () => invoke<GalleryItem[]>("list_gallery"),
+  galleryThumbnail: (path: string) =>
+    invoke<string>("gallery_thumbnail", { path }),
+  galleryFullImage: (path: string) =>
+    invoke<string>("gallery_full_image", { path }),
+  deleteGalleryItem: (path: string) =>
+    invoke<void>("delete_gallery_item", { path }),
+  saveDirectory: () => invoke<string>("save_directory"),
+  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  openDirectory: (path: string) => invoke<void>("open_directory", { path }),
+  chooseDirectory: () => invoke<string | null>("choose_directory"),
   openChat: (cropId?: string, action?: AiAction) =>
     invoke<void>("open_chat_window", { cropId: cropId ?? null, action: action ?? null }),
   framePath: (monitorId: number, sessionId: string) =>
@@ -108,6 +133,9 @@ export const events = {
   /** Fired when a new crop is handed to the chat window. */
   onAiBind: (cb: (d: AiBind) => void): Promise<UnlistenFn> =>
     listen<AiBind>("ai://bind", (e) => cb(e.payload)),
+  /** Fired when the tray asks the main window to switch section. */
+  onUiTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
+    listen<string>("ui://tab", (e) => cb(e.payload)),
 };
 
 /** Errors from Rust arrive as strings; normalise them for display. */

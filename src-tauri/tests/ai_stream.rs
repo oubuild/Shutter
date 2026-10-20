@@ -4,8 +4,8 @@
 //! OpenAI-compatible SSE dialect, so the parsing, streaming, error and timeout
 //! paths are exercised deterministically.
 
-use cap_photo_lib::ai::{endpoint, AiClient, SseBuffer};
-use cap_photo_lib::types::AiAction;
+use shutter_lib::ai::{endpoint, AiClient, SseBuffer};
+use shutter_lib::types::AiAction;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -221,8 +221,8 @@ fn synthetic_png(rgba: [u8; 4], size: u32) -> Vec<u8> {
 #[tokio::test]
 #[ignore]
 async fn live_deepseek_vision_round_trip() {
-    let settings = cap_photo_lib::settings::load_settings();
-    let key = match cap_photo_lib::settings::load_api_key() {
+    let settings = shutter_lib::settings::load_settings();
+    let key = match shutter_lib::settings::load_api_key() {
         Ok(k) => k,
         Err(e) => {
             println!("SKIP: no stored API key ({e})");
