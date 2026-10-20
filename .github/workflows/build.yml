@@ -101,7 +101,13 @@ jobs:
             target: x86_64-pc-windows-msvc
             bundles: nsis,msi
           - name: Linux x64
-            platform: ubuntu-22.04
+            # 24.04, not 22.04: libspa-sys runs bindgen against the system
+            # PipeWire headers, and 22.04 ships 0.3.48. libspa 0.10 needs at
+            # least 0.3.65 — 0.3.48 has neither `spa_meta_first` nor the
+            # `flags` field on `spa_video_info_raw`, so the bindings fail to
+            # compile. 24.04 ships 1.0.5, and also matches the glibc the .deb
+            # is built against.
+            platform: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             bundles: deb,appimage
 
@@ -130,12 +136,17 @@ jobs:
           # graphs, and a shared key would evict itself on every run.
           key: ${{ matrix.target }}
           workspaces: src-tauri -> target
+          # A red job normally discards its cache, which is exactly backwards:
+          # a build that fails while compiling dependencies is the one that
+          # downloaded the most crates. Keep it so the next attempt starts warm
+          # instead of re-fetching the whole registry index and every crate.
+          cache-on-failure: true
 
       # xcap needs the X11/Wayland capture stack, tauri needs webkit2gtk and
-      # GTK, keyring needs D-Bus, and pipewire-sys runs pkg-config for
-      # libpipewire/libspa at build time.
+      # GTK, keyring needs D-Bus, and libspa-sys runs bindgen against the
+      # PipeWire headers at build time.
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -143,7 +154,6 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            libappindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \

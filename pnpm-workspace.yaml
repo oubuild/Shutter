@@ -1,5 +1,9 @@
 packages:
   - "."
 
-onlyBuiltDependencies:
-  - esbuild
+# pnpm 12 no longer reads the `pnpm` field in package.json, and it refuses to
+# install when a dependency has build scripts that were never approved. esbuild
+# downloads its platform binary in a postinstall step, so it must be allowed
+# explicitly or `pnpm install` exits with ERR_PNPM_IGNORED_BUILDS.
+allowBuilds:
+  esbuild: true

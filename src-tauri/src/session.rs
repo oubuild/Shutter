@@ -5,15 +5,22 @@
 //! supersedes the previous one, and crop handles are dropped once the AI layer
 //! has consumed them.
 
-use crate::capture::Display;
+use crate::types::MonitorInfo;
 use anyhow::{anyhow, Result};
 use image::RgbaImage;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// A capture session: the monitors it covers plus their frozen frames.
+///
+/// Only plain data lives here, never an `xcap::Monitor`. That type wraps a
+/// platform handle (`HMONITOR` on Windows, a `CGDirectDisplayID` on macOS) and
+/// is `!Send` there, while this struct is stored in Tauri's managed state,
+/// which requires `Send + Sync`. Capturing up front and keeping the pixels is
+/// also what the overlay wants: it renders a frozen desktop, not a live one.
 pub struct Session {
     pub id: String,
-    pub displays: Vec<Display>,
+    pub monitors: Vec<MonitorInfo>,
     /// Physical-resolution frame per monitor id.
     frames: HashMap<u32, RgbaImage>,
 }
@@ -23,8 +30,8 @@ impl Session {
         self.frames.get(&monitor_id)
     }
 
-    pub fn display(&self, monitor_id: u32) -> Option<&Display> {
-        self.displays.iter().find(|d| d.info.id == monitor_id)
+    pub fn monitor(&self, monitor_id: u32) -> Option<&MonitorInfo> {
+        self.monitors.iter().find(|m| m.id == monitor_id)
     }
 }
 
@@ -48,21 +55,20 @@ impl Store {
         Self::default()
     }
 
-    /// Capture every display and make this the active session.
-    pub fn begin(&self, displays: Vec<Display>) -> Result<Arc<Session>> {
-        let mut frames = HashMap::with_capacity(displays.len());
-        for display in &displays {
-            frames.insert(display.info.id, display.capture()?);
-        }
+    /// Make an already-captured set of frames the active session.
+    ///
+    /// The caller does the capturing, so no `xcap::Monitor` ever crosses into
+    /// this struct (see the `Session` doc comment for why that matters).
+    pub fn begin(&self, monitors: Vec<MonitorInfo>, frames: Vec<(u32, RgbaImage)>) -> Arc<Session> {
         let session = Arc::new(Session {
             id: uuid::Uuid::new_v4().to_string(),
-            displays,
-            frames,
+            monitors,
+            frames: frames.into_iter().collect(),
         });
         *self.current.lock().unwrap() = Some(Arc::clone(&session));
         // A new capture invalidates prior crops by construction.
         self.crops.lock().unwrap().clear();
-        Ok(session)
+        session
     }
 
     pub fn current(&self) -> Option<Arc<Session>> {

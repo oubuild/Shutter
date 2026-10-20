@@ -5,6 +5,12 @@ use anyhow::{Context, Result};
 use image::RgbaImage;
 use xcap::Monitor;
 
+/// A monitor that can be captured, plus the descriptor the frontend sees.
+///
+/// This deliberately borrows the live `xcap::Monitor` for a single call rather
+/// than storing it in the session: on Windows that type wraps an `HMONITOR`
+/// (`*mut c_void`) and is therefore `!Send`, which would make any struct
+/// holding it unusable as Tauri managed state.
 pub struct Display {
     pub info: MonitorInfo,
     monitor: Monitor,
@@ -53,6 +59,21 @@ pub fn displays() -> Result<Vec<Display>> {
 
     out.sort_by_key(|d| (!d.info.is_primary, d.info.x, d.info.y));
     Ok(out)
+}
+
+/// Enumerate the displays and capture every one, returning plain data only.
+///
+/// The live `xcap::Monitor` handles are created and dropped inside this
+/// synchronous function, so the caller only ever receives `Send` values and
+/// can safely store the result in Tauri managed state.
+pub fn capture_all() -> Result<(Vec<MonitorInfo>, Vec<(u32, RgbaImage)>)> {
+    let displays = displays()?;
+    let mut frames = Vec::with_capacity(displays.len());
+    for display in &displays {
+        frames.push((display.info.id, display.capture()?));
+    }
+    let monitors = displays.into_iter().map(|d| d.info).collect();
+    Ok((monitors, frames))
 }
 
 #[cfg(test)]

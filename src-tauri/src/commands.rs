@@ -1,7 +1,7 @@
 //! Tauri command surface exposed to the webview.
 
 use crate::types::{
-    AiAction, AiRequest, CaptureAction, CaptureResult, CaptureSession, MonitorInfo, Rect, Settings,
+    AiAction, AiRequest, CaptureAction, CaptureResult, CaptureSession, Rect, Settings,
 };
 use crate::{ai, compose, output, overlay, pin, settings, windows};
 use anyhow::Result;
@@ -21,15 +21,17 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     // Give macOS a beat to remove the windows from the window server.
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
 
-    let displays = crate::capture::displays()?;
-    if displays.is_empty() {
+    // Enumerate and capture in one synchronous step. `capture_all` returns
+    // plain data only, so nothing `!Send` (an `xcap::Monitor` wraps a raw
+    // `HMONITOR` on Windows) reaches the managed store; see `session::Session`.
+    let (monitors, frames) = crate::capture::capture_all()?;
+    if monitors.is_empty() {
         anyhow::bail!("没有检测到可用的显示器");
     }
-    let monitors: Vec<MonitorInfo> = displays.iter().map(|d| d.info.clone()).collect();
 
     // Capture first, then build the windows: the frames stay clean and the
     // overlay never races the capture.
-    let session = store.begin(displays)?;
+    let session = store.begin(monitors.clone(), frames);
 
     let frame_dir = settings::app_dir()?.join("frames");
     for info in &monitors {
@@ -68,7 +70,7 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
     let session = store.current()?;
     Some(CaptureSession {
         session_id: session.id.clone(),
-        monitors: session.displays.iter().map(|d| d.info.clone()).collect(),
+        monitors: session.monitors.clone(),
     })
 }
 
@@ -172,9 +174,8 @@ async fn do_confirm(
         .ok_or_else(|| anyhow::anyhow!("找不到显示器 {monitor_id} 的画面"))?
         .clone();
     let scale = session
-        .display(monitor_id)
+        .monitor(monitor_id)
         .ok_or_else(|| anyhow::anyhow!("找不到显示器 {monitor_id}"))?
-        .info
         .scale_factor;
 
     let (fw, fh) = frame.dimensions();
