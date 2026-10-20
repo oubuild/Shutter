@@ -54,9 +54,12 @@ pub fn run() {
                 log::warn!("cannot register Cmd+Shift+A ({e}); the tray menu still works");
             }
 
-            // Debug hook: lets automation verify the overlay without sending a
-            // global shortcut (which needs Accessibility permission).
+            // Automation hooks: let tests drive the overlay without sending a
+            // global shortcut (which needs Accessibility permission). Compiled
+            // out unless the `debug-hooks` feature is enabled.
+            #[cfg(feature = "debug-hooks")]
             log::info!("debug capture-on-start env: {:?}", std::env::var("CAP_PHOTO_CAPTURE_ON_START"));
+            #[cfg(feature = "debug-hooks")]
             if std::env::var("CAP_PHOTO_CAPTURE_ON_START").is_ok() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
@@ -77,6 +80,7 @@ pub fn run() {
             }
 
             // Independent of capture: open an auxiliary window for UI checks.
+            #[cfg(feature = "debug-hooks")]
             if let Ok(view) = std::env::var("CAP_PHOTO_OPEN_VIEW") {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
@@ -97,7 +101,9 @@ pub fn run() {
             commands::capture_screens,
             commands::current_session,
             commands::debug_report,
+            #[cfg(feature = "debug-hooks")]
             commands::debug_plain_window,
+            #[cfg(feature = "debug-hooks")]
             commands::debug_open_view,
             commands::frame_path,
             commands::cancel_capture,

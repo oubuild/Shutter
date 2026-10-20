@@ -38,6 +38,9 @@ env_logger = "0.11"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# Automation hooks used by the test suite (capture-on-start, debug views).
+# Never enable in a release build.
+debug-hooks = []
 
 [profile.release]
 codegen-units = 1

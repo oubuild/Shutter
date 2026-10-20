@@ -73,6 +73,7 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
 }
 
 /// Debug-only: open one of the auxiliary windows by view name.
+#[cfg(feature = "debug-hooks")]
 #[tauri::command]
 pub fn debug_open_view(app: AppHandle, view: String) -> std::result::Result<(), String> {
     match view.as_str() {
@@ -83,6 +84,7 @@ pub fn debug_open_view(app: AppHandle, view: String) -> std::result::Result<(), 
 }
 
 /// Debug-only: open a plain window to compare against the overlay window.
+#[cfg(feature = "debug-hooks")]
 #[tauri::command]
 pub fn debug_plain_window(app: AppHandle) -> std::result::Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -98,11 +100,14 @@ pub fn debug_plain_window(app: AppHandle) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Debug-only: frontend reports its boot state; logged so the terminal can see
-/// whether the webview actually executed any JavaScript.
+/// Frontend reports its boot state; logged so a terminal can see whether the
+/// webview actually executed any JavaScript. Compiled out of release builds.
 #[tauri::command]
 pub fn debug_report(stage: String, detail: String) {
+    #[cfg(feature = "debug-hooks")]
     log::info!("[fe] {stage}: {detail}");
+    #[cfg(not(feature = "debug-hooks"))]
+    let _ = (stage, detail);
 }
 
 /// Absolute path of the frozen frame for a monitor, for `convertFileSrc`.
