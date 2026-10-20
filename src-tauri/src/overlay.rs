@@ -48,7 +48,7 @@ pub fn create(
         &label,
         WebviewUrl::App(overlay_url(monitor_id).into()),
     )
-    .title("cap-photo")
+    .title("Shutter")
     .position(x as f64, y as f64)
     .inner_size(width as f64, height as f64)
     .decorations(false)

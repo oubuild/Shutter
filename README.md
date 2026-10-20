@@ -1,34 +1,58 @@
-# cap-photo
+# Shutter
 
-macOS 截图 + 标注 + 贴图 + 多模型视觉助手。
+macOS 截图 · 标注 · 贴图 · 多模型视觉助手。
 
-> 由 [oubuild](https://github.com/oubuild) 构建。截图交互参考了小旺AI截图的设计语言，
-> 代码与美术资源全部独立实现。
+一个常驻菜单栏的原生小工具：`⌘⇧A` 框选截图，就地标注，然后复制、保存、贴到屏幕上，
+或者直接丢给视觉模型提取文字、翻译、解释。
+
+> 仓库名与对外名称是 **Shutter**；包名、bundle identifier、钥匙串 service 等内部标识
+> 仍为 `cap-photo`（`dev.oubuild.cap-photo`），以便与已有安装和配置保持兼容。
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform: macOS 12+](https://img.shields.io/badge/platform-macOS%2012%2B-lightgrey)
+![Tauri 2](https://img.shields.io/badge/Tauri-2-24c8db)
 
 ## 功能
 
-- **截图**：`⌘⇧A` 或托盘菜单，多显示器各自一个透明覆层
+- **截图**：`⌘⇧A` 或点击菜单栏图标；多显示器各自一个透明覆层，选区可整体拖动、八向手柄缩放
 - **标注**：矩形 / 椭圆 / 箭头 / 画笔 / 马赛克 / 文字 / 高亮 / 序号 / 取色，`⌘Z` 撤销
-- **输出**：复制到剪贴板、保存到 `~/Pictures/cap-photo/`、贴图置顶（可拖动、滚轮缩放）
-- **AI**：提取文字 / 翻译 / 解释 / 自由提问，流式返回
-- **任意模型**：任何兼容 OpenAI Chat Completions 且支持 `image_url` 的端点
+- **输出**：复制到剪贴板、保存到 `~/Pictures/cap-photo/`、贴图置顶（拖动移动、滚轮缩放、双击关闭）
+- **AI**：提取文字 / 翻译 / 解释 / 自由提问，流式返回，回答可一键复制
+- **任意模型**：任何兼容 OpenAI Chat Completions 且接受 `image_url` 的端点，内置常用预设
+
+## 系统要求
+
+- macOS 12.0 及以上（Apple Silicon / Intel）
+- 构建需要 Rust ≥ 1.90、Node.js ≥ 20、pnpm
 
 ## 快速开始
 
 ```bash
 pnpm install
-pnpm app:dev
+pnpm app:dev        # 开发模式，前端热更新
+pnpm app:build      # 打包 .app / .dmg 到 src-tauri/target/release/bundle/
 ```
 
 首次运行：
 
-1. 系统设置 → 隐私与安全性 → **屏幕录制**，勾选 cap-photo
-2. 托盘图标 → **设置…**，填入服务地址 / 模型 / API Key
+1. 系统设置 → 隐私与安全性 → **屏幕录制**，勾选 Shutter（cap-photo）
+2. 菜单栏图标 → **设置…**，填入服务地址 / 模型 / API Key
 3. `⌘⇧A` 截图
+
+## 快捷键
+
+| 按键 | 作用 |
+| --- | --- |
+| `⌘⇧A` | 开始截图（全局） |
+| `Esc` | 取消截图 |
+| `Enter` / `⌘C` | 确认并复制 |
+| `⌘S` | 确认并保存 |
+| `⌘Z` | 撤销上一个标注 |
+| `1` – `9` | 切换矩形 / 椭圆 / 箭头 / 画笔 / 马赛克 / 文字 / 高亮 / 序号 / 取色 |
 
 ## 模型配置
 
-设置页提供预设，也可手填：
+设置页提供预设，也可手填任意兼容端点：
 
 | 服务 | base URL | 模型 |
 | --- | --- | --- |
@@ -37,20 +61,14 @@ pnpm app:dev
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
 | Ollama | `http://127.0.0.1:11434/v1` | `llava` |
 
-请求地址会自动补 `/chat/completions`。模型必须支持图片输入。
+请求地址会自动补 `/chat/completions`。模型必须支持图片输入，否则会返回错误。
 
-**API Key 存在 macOS 钥匙串**（service `cap-photo`），不写入配置文件，前端也拿不到。
+## 隐私
 
-## 测试
-
-```bash
-pnpm typecheck                      # 前端类型
-cd src-tauri && cargo test          # 单元 + AI 集成（本地 mock SSE）
-cd src-tauri && cargo test --test capture_pipeline -- --ignored   # 真实屏幕
-cd src-tauri && cargo test --test ai_stream -- --ignored live_deepseek  # 真实模型（消耗额度）
-```
-
-真实屏幕测试需要屏幕录制权限，否则 `screencapture` 只能拿到壁纸。
+- **API Key 存在 macOS 钥匙串**（service `cap-photo`），不写入配置文件，前端拿不到
+- 截图帧与设置存放在 `~/Library/Application Support/cap-photo/`，新一次截图会清理上一帧
+- 只有点击 AI 动作时，当前选区的 PNG 才会发往你配置的端点；除此之外没有网络请求
+- 无遥测、无自动更新、无后台服务
 
 ## 结构
 
@@ -70,9 +88,24 @@ src-tauri/src/
   overlay.rs / pin.rs / windows.rs / commands.rs
 ```
 
-坐标约定见 `src-tauri/src/types.rs` 顶部注释：前端只传 CSS px，Rust 在
-`compose::to_pixel_rect` 里**只做一次** `× scale_factor`。
+坐标约定见 [`src-tauri/src/types.rs`](src-tauri/src/types.rs) 顶部注释：前端只传 CSS px，
+Rust 在 `compose::to_pixel_rect` 里**只做一次** `× scale_factor`。
+
+## 测试
+
+```bash
+pnpm typecheck                      # 前端类型
+cd src-tauri && cargo test          # 单元 + AI 集成（本地 mock SSE）
+cd src-tauri && cargo test --test capture_pipeline -- --ignored   # 真实屏幕
+cd src-tauri && cargo test --test ai_stream -- --ignored live_deepseek  # 真实模型（消耗额度）
+```
+
+真实屏幕测试需要屏幕录制权限，否则 `screencapture` 只能拿到壁纸。
+
+## 致谢
+
+截图交互参考了同类 macOS 截图工具的设计语言；代码与美术资源均为独立实现。
 
 ## 许可证
 
-MIT
+[MIT](LICENSE) © Oubuild

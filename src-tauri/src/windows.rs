@@ -28,7 +28,7 @@ pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f6
 }
 
 pub fn open_settings(app: &AppHandle) -> Result<()> {
-    open(app, "settings", "settings", "cap-photo 设置", 620.0, 640.0)?;
+    open(app, "settings", "settings", "Shutter 设置", 620.0, 640.0)?;
     Ok(())
 }
 
@@ -41,7 +41,7 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
         Some(id) => format!("chat&crop={id}"),
         None => "chat".to_string(),
     };
-    let win = open(app, "chat", &view, "cap-photo AI", 680.0, 720.0)?;
+    let win = open(app, "chat", &view, "Shutter AI", 680.0, 720.0)?;
     if let Some(crop_id) = crop_id {
         use tauri::Emitter;
         let payload = serde_json::json!({ "cropId": crop_id, "action": action });
@@ -63,7 +63,7 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "截图  ⌘⇧A", true, None::<&str>)?;
     let chat = MenuItem::with_id(app, "chat", "AI 助手", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 cap-photo", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 Shutter", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[

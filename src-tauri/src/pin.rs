@@ -17,7 +17,7 @@ pub fn ensure(app: &AppHandle, pin_id: &str, rect: Rect) -> Result<WebviewWindow
         &label,
         WebviewUrl::App(format!("index.html?view=pin&id={pin_id}").into()),
     )
-    .title("cap-photo pin")
+    .title("Shutter pin")
     .position(rect.x, rect.y)
     .inner_size(rect.width.max(80.0), rect.height.max(80.0))
     .decorations(false)

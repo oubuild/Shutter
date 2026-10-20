@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "macOS screenshot + annotation + pin + DeepSeek vision assistant",
+  "description": "Shutter — macOS screenshot, annotation, pin, and vision-assistant tool",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
