@@ -38,22 +38,31 @@ function arrowGeometry(from: Point, to: Point, strokeWidth: number) {
  * Downscale to a tiny canvas, then upscale with smoothing disabled while
  * drawing — that yields crisp blocks in the exported PNG, which a render-time
  * smoothing setting could not guarantee.
+ *
+ * The source is in physical pixels while the stage is in CSS pixels; on a 2x
+ * monitor the canvas used to be placed at its physical size and showed only
+ * its top-left quadrant, double-sized. The overlay window spans exactly one
+ * monitor, so `innerWidth` gives the CSS width to convert with.
  */
-function useMosaicCanvas(source: HTMLImageElement | null | undefined, block: number) {
-  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
+function useMosaicCanvas(
+  source: HTMLImageElement | null | undefined,
+  block: number,
+): { canvas: HTMLCanvasElement; scale: number } | null {
+  const [mosaic, setMosaic] = useState<{ canvas: HTMLCanvasElement; scale: number } | null>(null);
 
   useEffect(() => {
     if (!source || !source.naturalWidth) {
-      setCanvas(null);
+      setMosaic(null);
       return;
     }
     const w = source.naturalWidth;
     const h = source.naturalHeight;
+    const scale = w / window.innerWidth;
     const size = Math.max(3, Math.round(block));
 
     const small = document.createElement("canvas");
-    small.width = Math.max(1, Math.floor(w / size));
-    small.height = Math.max(1, Math.floor(h / size));
+    small.width = Math.max(1, Math.floor(w / scale / size));
+    small.height = Math.max(1, Math.floor(h / scale / size));
     const smallCtx = small.getContext("2d");
     if (!smallCtx) return;
     smallCtx.imageSmoothingEnabled = true;
@@ -67,10 +76,10 @@ function useMosaicCanvas(source: HTMLImageElement | null | undefined, block: num
     bigCtx.imageSmoothingEnabled = false;
     bigCtx.drawImage(small, 0, 0, small.width, small.height, 0, 0, w, h);
 
-    setCanvas(big);
+    setMosaic({ canvas: big, scale });
   }, [source, block]);
 
-  return canvas;
+  return mosaic;
 }
 
 function MosaicShape({
@@ -80,17 +89,25 @@ function MosaicShape({
   shape: Extract<Shape, { kind: "mosaic" }>;
   source?: HTMLImageElement | null;
 }) {
-  const canvas = useMosaicCanvas(source, shape.block);
+  const mosaic = useMosaicCanvas(source, shape.block);
   const x = Math.min(shape.from.x, shape.to.x);
   const y = Math.min(shape.from.y, shape.to.y);
   const w = Math.abs(shape.to.x - shape.from.x);
   const h = Math.abs(shape.to.y - shape.from.y);
 
-  if (!canvas || w < 2 || h < 2) return null;
+  if (!mosaic || w < 2 || h < 2) return null;
+  const { canvas, scale } = mosaic;
 
   return (
     <Group listening={false} clipX={x} clipY={y} clipWidth={w} clipHeight={h}>
-      <KImage image={canvas} x={0} y={0} width={canvas.width} height={canvas.height} />
+      {/* Backing at physical px (crisp on export), shown at CSS size. */}
+      <KImage
+        image={canvas}
+        x={0}
+        y={0}
+        width={canvas.width / scale}
+        height={canvas.height / scale}
+      />
     </Group>
   );
 }

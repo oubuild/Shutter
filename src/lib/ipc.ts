@@ -23,7 +23,7 @@ export type CaptureSession = {
 
 export type Rect = { x: number; y: number; width: number; height: number };
 
-export type CaptureAction = "copy" | "save" | "pin";
+export type CaptureAction = "copy" | "save" | "pin" | "ask";
 
 export type CaptureResult = {
   cropId: string;
@@ -34,7 +34,7 @@ export type CaptureResult = {
   savedPath: string | null;
 };
 
-export type AiAction = "extract" | "translate" | "explain" | "ask";
+export type AiAction = "extract" | "translate" | "explain" | "ask" | "reply";
 
 export type AiRequest = {
   cropId: string;
@@ -104,12 +104,14 @@ export const api = {
     rect: Rect,
     action: CaptureAction,
     overlayDataUrl: string | null,
+    savePath?: string | null,
   ) =>
     invoke<CaptureResult>("confirm_capture", {
       monitorId,
       rect,
       action,
       overlayDataUrl,
+      savePath: savePath ?? null,
     }),
   aiAsk: (request: AiRequest, requestId: string) =>
     invoke<void>("ai_ask", { request, requestId }),
@@ -146,6 +148,12 @@ export const api = {
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   openDirectory: (path: string) => invoke<void>("open_directory", { path }),
   chooseDirectory: () => invoke<string | null>("choose_directory"),
+  /**
+   * Native "save as" dialog. Returns null when the user cancelled — the
+   * caller then cancels the capture (the reference semantics).
+   */
+  saveAsDialog: (defaultName: string) =>
+    invoke<string | null>("save_as_dialog", { defaultName }),
   openChat: (cropId?: string, action?: AiAction) =>
     invoke<void>("open_chat_window", { cropId: cropId ?? null, action: action ?? null }),
   framePath: (monitorId: number, sessionId: string) =>

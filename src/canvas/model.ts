@@ -121,13 +121,13 @@ export const TOOL_KEYS: Record<string, ToolId> = {
 };
 
 export const PALETTE = [
-  "#ef4444",
-  "#f59e0b",
-  "#22c55e",
-  "#3b82f6",
-  "#a855f7",
-  "#ffffff",
-  "#111827",
+  "#F22B24",
+  "#027FFF",
+  "#05A532",
+  "#FFBE00",
+  "#000000",
+  "#999999",
+  "#FFFFFF",
 ];
 
 /** Next step number is derived from existing badges, not from a counter. */

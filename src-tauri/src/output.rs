@@ -46,6 +46,24 @@ pub fn save_png(png: &[u8], dir: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Write a PNG to the exact path chosen in the native save dialog.
+///
+/// The extension is restored when the dialog returned a name without one;
+/// the parent directory is created defensively (a save dialog only picks
+/// files inside existing folders, but the path may still be typed by hand).
+pub fn save_png_at(png: &[u8], target: &str) -> Result<PathBuf> {
+    let mut path = std::path::PathBuf::from(target);
+    if path.extension().is_none() {
+        path.set_extension("png");
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(&path, png).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
 /// Small PNG data URL so the UI can show the result without another IPC round-trip.
 pub fn data_url(png: &[u8]) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine as _};

@@ -53,6 +53,10 @@ pub enum CaptureAction {
     Copy,
     Save,
     Pin,
+    /// Crop for the AI window only: no clipboard write, no auto-save. Mirrors
+    /// the reference tool, where an AI action only sends the request and
+    /// nothing else touches the user's clipboard or disk.
+    Ask,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +85,9 @@ pub enum AiAction {
     Explain,
     /// Free-form instruction supplied by the user.
     Ask,
+    /// Draft a socially adept reply to the conversation shown in the
+    /// screenshot (the reference dialog's "高情商回复" action).
+    Reply,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

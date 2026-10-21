@@ -43,6 +43,12 @@ pub fn prompt_for(action: AiAction, lang: Option<&str>, question: Option<&str>) 
                 q.to_string()
             }
         }
+        AiAction::Reply => {
+            "这是对话/聊天场景的截图。请代写一条高情商回复：先理解上下文与对方立场，\
+             回复要得体、自然、有分寸，既不生硬也不谄媚。只输出可以直接发送的回复内容本身，\
+             不要出现“回复：”之类的前缀；若截图并非对话，请说明无法代写回复。"
+                .to_string()
+        }
     };
     (system.to_string(), user)
 }

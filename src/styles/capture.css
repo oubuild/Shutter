@@ -290,9 +290,9 @@ textarea {
   position: fixed;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: 44px;
-  padding: 0 6px;
+  padding: 0 8px;
   color: var(--bar-fg);
   background: var(--bar-bg);
   border: 1px solid var(--bar-border);
@@ -308,16 +308,15 @@ textarea {
   gap: 0;
 }
 
-/* 32x32 targets keep the reference's 8px radius and 44px bar while fitting
-   twenty controls without the bar growing past a third of the screen. */
+/* 36x36 targets with 20px glyphs, matching the reference bar metrics. */
 .cap-icon {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 17px;
+  font-size: 20px;
   line-height: 1;
   border: none;
   background: transparent;
@@ -338,7 +337,7 @@ textarea {
   width: 1px;
   height: 14px;
   background: var(--bar-divider);
-  margin: 0 2px;
+  margin: 0 4px;
   flex: 0 0 auto;
 }
 
@@ -414,20 +413,35 @@ textarea {
   border: 1px solid rgba(0, 0, 0, 0.35);
 }
 
-/* The confirm action is the only filled control in the bar. */
-.cap-icon.primary {
-  background: var(--bar-accent);
-  color: #fff;
-}
-
-.cap-icon.primary:hover:not(:disabled) {
-  background: #2f83ff;
-}
-
 .cap-icon:disabled {
   color: rgba(255, 255, 255, 0.35);
   background: transparent;
   cursor: not-allowed;
+}
+
+/* Inline editor for the text tool: opens where the shape will land, styled
+   to match the committed Konva text (same family/weight/size, shape colour). */
+.overlay-text-input {
+  position: fixed;
+  z-index: 14;
+  min-width: 180px;
+  max-width: 480px;
+  padding: 2px 4px;
+  font-family: -apple-system, "PingFang SC", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+  background: rgba(22, 24, 29, 0.55);
+  border: 1px dashed rgba(255, 255, 255, 0.65);
+  border-radius: 4px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.overlay-text-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 /* Icons are inline SVG; keep them optically centred in the 36px target. */
@@ -457,11 +471,12 @@ textarea {
 /* ---------- eyedropper loupe ---------- */
 
 /* Floats next to the cursor while the picker tool is active: a pixel-accurate
-   magnifier, the sampled colour, and its HEX/RGB values. */
+   magnifier, the sampled colour, and its current notation (Shift cycles).
+   Width = zoom canvas + 2x6px padding, so the canvas spans the full panel. */
 .picker-hud {
   position: fixed;
   z-index: 12;
-  width: 136px;
+  width: 147px;
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -476,8 +491,8 @@ textarea {
 
 .picker-zoom {
   display: block;
-  width: 109px;
-  height: 109px;
+  width: 135px;
+  height: 135px;
   border-radius: 5px;
   image-rendering: pixelated;
   background: #000;
@@ -507,8 +522,9 @@ textarea {
 
 .picker-hex {
   font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .picker-rgb {

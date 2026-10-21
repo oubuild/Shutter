@@ -183,7 +183,8 @@ pub fn cancel_capture(app: AppHandle) -> std::result::Result<(), String> {
 /// Crop the active session and perform the requested action.
 ///
 /// `overlay_data_url` is the annotation layer rendered by the webview; it is
-/// merged over the crop before anything is written.
+/// merged over the crop before anything is written. `save_path` is the exact
+/// file the user picked in the native save dialog (Save action only).
 #[tauri::command]
 pub async fn confirm_capture(
     app: AppHandle,
@@ -191,8 +192,9 @@ pub async fn confirm_capture(
     rect: Rect,
     action: CaptureAction,
     overlay_data_url: Option<String>,
+    save_path: Option<String>,
 ) -> std::result::Result<CaptureResult, String> {
-    do_confirm(app, monitor_id, rect, action, overlay_data_url)
+    do_confirm(app, monitor_id, rect, action, overlay_data_url, save_path)
         .await
         .map_err(|e| format!("{e:#}"))
 }
@@ -203,6 +205,7 @@ async fn do_confirm(
     rect: Rect,
     action: CaptureAction,
     overlay_data_url: Option<String>,
+    save_path: Option<String>,
 ) -> Result<CaptureResult> {
     let store: State<'_, Arc<crate::session::Store>> = app.state();
     let session = store
@@ -234,13 +237,25 @@ async fn do_confirm(
     let mut message = None;
     let mut saved_path = None;
 
+    // The AI hand-off crops and nothing else: no clipboard write, no gallery
+    // auto-save — the reference tool's AI actions never touch either.
+    let ai_handoff = action == CaptureAction::Ask;
+
     // Every capture lands in the gallery by default so the list is a record of
     // what was actually taken, not just what was explicitly saved. ⌘S/Pin imply
     // a save regardless of the setting.
     let explicit_save = action == CaptureAction::Save || action == CaptureAction::Pin;
-    if explicit_save || settings.auto_save {
-        let dir = settings::save_dir(&settings)?;
-        let path = output::save_png(&png, &dir)?;
+    if !ai_handoff && (explicit_save || settings.auto_save) {
+        let path = if action == CaptureAction::Save {
+            match save_path.as_deref() {
+                // The user picked an exact destination in the native dialog;
+                // `save_png_at` appends .png when the name lost it.
+                Some(p) => output::save_png_at(&png, p)?,
+                None => output::save_png(&png, &settings::save_dir(&settings)?)?,
+            }
+        } else {
+            output::save_png(&png, &settings::save_dir(&settings)?)?
+        };
         saved_path = Some(path.display().to_string());
         message = Some(if explicit_save {
             format!("已保存到 {}", path.display())
@@ -252,8 +267,9 @@ async fn do_confirm(
         }
     }
 
-    if action == CaptureAction::Copy
-        || (settings.copy_after_capture && action != CaptureAction::Save)
+    if !ai_handoff
+        && (action == CaptureAction::Copy
+            || (settings.copy_after_capture && action != CaptureAction::Save))
     {
         output::copy_image(&png)?;
         message = Some(match message {
@@ -300,7 +316,7 @@ pub async fn ai_ask(
 
 #[tauri::command]
 pub fn ai_actions() -> Vec<&'static str> {
-    vec!["extract", "translate", "explain", "ask"]
+    vec!["extract", "translate", "explain", "ask", "reply"]
 }
 
 /// Suggested endpoints for the settings window.
@@ -536,6 +552,60 @@ if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }";
     }
 }
 
+/// Native "save as" dialog. Returns the chosen path, or `None` when the user
+/// cancelled — the caller then cancels the capture, matching the reference
+/// tool's semantics.
+///
+/// Same OS-tooling approach as [`choose_directory`]: no dialog-plugin crate.
+#[tauri::command]
+pub fn save_as_dialog(default_name: String) -> std::result::Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // `choose file name` saves nothing itself; it only returns a path.
+        // The name may arrive shell-quoted when it contains spaces.
+        let script = format!(
+            "POSIX path of (choose file name with prompt \"保存截图\" default name \"{}\")",
+            default_name.replace('\"', "\\\"")
+        );
+        let output = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| format!("无法打开保存对话框：{e}"))?;
+        if !output.status.success() {
+            // Cancelled in the dialog, not an error.
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().trim_matches('\'').to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.SaveFileDialog; \
+             $d.FileName = '{}'; $d.Filter = 'Image|*.png'; \
+             if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}",
+            default_name.replace('\'', "''")
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| format!("无法打开保存对话框：{e}"))?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = default_name;
+        Err("当前平台不支持另存为对话框".to_string())
+    }
+}
+
 /// Open the AI window, optionally bound to an existing crop.
 #[tauri::command]
 pub fn open_chat_window(
@@ -612,5 +682,6 @@ pub fn action_hint(action: AiAction) -> &'static str {
         AiAction::Translate => "翻译",
         AiAction::Explain => "解释",
         AiAction::Ask => "提问",
+        AiAction::Reply => "高情商回复",
     }
 }

@@ -28,6 +28,9 @@ const ACTIONS: ReadonlyArray<{ action: AiAction; label: string }> = [
   { action: "extract", label: "提取文字" },
   { action: "translate", label: "翻译" },
   { action: "explain", label: "解释" },
+  // The reference AI dialog's fourth preset: draft a socially adept reply
+  // to the conversation shown in the screenshot.
+  { action: "reply", label: "高情商回复" },
   { action: "ask", label: "提问" },
 ];
 

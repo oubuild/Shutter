@@ -203,6 +203,7 @@ pub fn run() {
             commands::reveal_path,
             commands::open_directory,
             commands::choose_directory,
+            commands::save_as_dialog,
             commands::open_chat_window,
             commands::close_pin,
             commands::save_crop,

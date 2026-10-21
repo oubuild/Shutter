@@ -58,7 +58,8 @@ const AI_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
   { id: "ask", label: "提问" },
 ];
 
-/** Output actions; copy is the primary one, so it is the only filled button. */
+/** Output actions. Copy keeps the plain icon style like every other button,
+ *  matching the reference bar (no filled primary control). */
 const OUT_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
   { id: "pin", label: "贴图", key: "R" },
   { id: "save", label: "保存", key: "⌘S" },
@@ -71,20 +72,22 @@ const GAP = 8;
 export function Toolbar(props: Props) {
   const { box, tool, color, strokeWidth, filled } = props;
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
-  // Dock below the selection, flipping above when there is no room.
-  useEffect(() => {
-    if (!box) {
-      setPos(null);
-      return;
-    }
+  // Dock below the selection, flipping above when there is no room. The bar
+  // only enters the DOM once `pos` is set, so the first pass places with the
+  // last known width (a placeholder on the very first box) and a second pass
+  // corrects the offset once the real width is measurable — otherwise the
+  // bar sat at wherever a stale width put it.
+  const place = (width: number) => {
+    if (!box) return null;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const width = ref.current?.offsetWidth ?? 620;
+    // A bar wider than the viewport must stay on screen: the naive right
+    // clamp goes negative there and pushed the whole bar off-screen.
     let left = box.x + box.width - width;
-    left = Math.min(Math.max(GAP, left), vw - width - GAP);
+    left = Math.max(GAP, Math.min(left, Math.max(GAP, vw - width - GAP)));
 
     let top = box.y + box.height + GAP;
     if (top + TOOLBAR_H > vh - GAP) {
@@ -93,8 +96,33 @@ export function Toolbar(props: Props) {
     if (top < GAP) {
       top = Math.min(vh - TOOLBAR_H - GAP, box.y + box.height + GAP);
     }
-    setPos({ left, top });
+    return { left, top, width };
+  };
+
+  useEffect(() => {
+    if (!box) {
+      setPos(null);
+      return;
+    }
+    setPos(place(pos?.width ?? 620));
+    // The window can resize after the first placement (a viewport settling
+    // late, a monitor change); re-dock or the bar stays where the old
+    // geometry put it — possibly off-screen.
+    const onResize = () => setPos(place(pos?.width ?? 620));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !pos) return;
+    const width = el.offsetWidth;
+    if (width > 0 && Math.abs(width - pos.width) > 1) {
+      setPos(place(width));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos]);
 
   // Report computed colours once so contrast can be verified from the terminal
   // (screencapture cannot see this window without Screen Recording permission).
@@ -222,7 +250,6 @@ export function Toolbar(props: Props) {
           key={a.id}
           title={a.key ? `${a.label} ${a.key}` : a.label}
           svg={ICONS[a.id]}
-          primary={a.id === "copy"}
           disabled={props.busy}
           onClick={() => props.onAction(a.id)}
         />
@@ -243,20 +270,16 @@ function IconButton({
   title,
   svg,
   active,
-  primary,
   disabled,
   onClick,
 }: {
   title: string;
   svg: string;
   active?: boolean;
-  primary?: boolean;
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const cls = ["cap-icon", active ? "active" : "", primary ? "primary" : ""]
-    .filter(Boolean)
-    .join(" ");
+  const cls = ["cap-icon", active ? "active" : ""].filter(Boolean).join(" ");
   return (
     <button
       className={cls}

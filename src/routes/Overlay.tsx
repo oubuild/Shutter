@@ -42,7 +42,8 @@ type Drag =
   | { mode: "resize"; handle: Exclude<Handle, null | "move">; origin: Box }
   | { mode: "draw"; start: Point };
 
-const DEFAULT_COLOR = "#ef4444";
+/** Reference default: the same red the original tool draws with. */
+const DEFAULT_COLOR = "#F22B24";
 
 export function Overlay({ monitorId }: Props) {
   const [monitor, setMonitor] = useState<MonitorInfo | null>(null);
@@ -59,16 +60,29 @@ export function Overlay({ monitorId }: Props) {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [menu, setMenu] = useState<Point | null>(null);
+  /** Inline text editor: open at the click point while the text tool is used. */
+  const [textEdit, setTextEdit] = useState<{ at: Point; value: string } | null>(null);
 
   const drag = useRef<Drag | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  /**
+   * The annotation layer, held directly.
+   *
+   * Export used to reach into `stage.getLayers()[1]`, which silently produced
+   * `undefined` (the stage has exactly one layer), so every annotation was
+   * dropped on copy/save/pin/AI with no error. Keeping the reference means an
+   * export can never again depend on the layer's ordinal position.
+   */
+  const annotationLayerRef = useRef<Konva.Layer>(null);
   const sourceRef = useRef<HTMLImageElement | null>(null);
   /** Offscreen copy of the frozen frame, reused for pixel sampling. */
   const sampleRef = useRef<HTMLCanvasElement | null>(null);
-  /** Live readout for the eyedropper: position + sampled colour. */
-  const [picker, setPicker] = useState<{ x: number; y: number; hex: string; rgb: string } | null>(
-    null,
-  );
+  /** Live readout for the eyedropper: position + sampled colour channels. */
+  const [picker, setPicker] = useState<
+    { x: number; y: number; r: number; g: number; b: number } | null
+  >(null);
+  /** Which colour notation the loupe shows (and the clipboard receives). */
+  const [pickerFmt, setPickerFmt] = useState<PickerFmt>("hex");
   const pickerCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -104,6 +118,12 @@ export function Overlay({ monitorId }: Props) {
         setFrameSrc(src);
 
         const img = new Image();
+        // The frozen frame is served over the `asset:` scheme. Without a CORS
+        // request the drawn copy taints the canvas and every `getImageData`
+        // call (the eyedropper) throws SecurityError; Tauri's asset handler does
+        // send `Access-Control-Allow-Origin`, so ask for a clean one. This must
+        // be set before `src`, or the fetch has already started uncrossed.
+        img.crossOrigin = "anonymous";
         img.src = src;
         await img.decode().catch(() => undefined);
         sourceRef.current = img;
@@ -116,7 +136,41 @@ export function Overlay({ monitorId }: Props) {
         sample
           .getContext("2d", { willReadFrequently: true })
           ?.drawImage(img, 0, 0);
-        sampleRef.current = sample;
+        // Drop the cache if the copy cannot be read back, so the eyedropper
+        // reports "no sample" instead of throwing on every mouse move.
+        try {
+          sample
+            .getContext("2d", { willReadFrequently: true })
+            ?.getImageData(0, 0, 1, 1);
+          sampleRef.current = sample;
+        } catch (e) {
+          console.warn("frame canvas is not readable; eyedropper disabled", e);
+          sampleRef.current = null;
+        }
+        // Confirm from the terminal that the eyedropper can actually read the
+        // frame: an unreadable (tainted) copy is the failure that used to take
+        // the whole capture surface down, and it is invisible otherwise.
+        {
+          const probe = sampleRef.current;
+          const px = probe ? probe.getContext("2d") : null;
+          let readable = false;
+          let sampleHex: string | null = null;
+          try {
+            const d = px?.getImageData(
+              Math.floor(sample.width / 2),
+              Math.floor(sample.height / 2),
+              1,
+              1,
+            ).data;
+            if (d) {
+              readable = true;
+              sampleHex = `#${[d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+            }
+          } catch {
+            readable = false;
+          }
+          void reportDebug("frame-sampler", { readable, sampleHex });
+        }
       } catch (e) {
         setToast(errorText(e));
       }
@@ -188,25 +242,62 @@ export function Overlay({ monitorId }: Props) {
 
       // Picking a colour does not need a crop, so it works before/without a box.
       if (tool === "picker") {
+        // A stale drag from the previous select-tool gesture would otherwise be
+        // resumed by the next mousemove, which redraws the selection box from
+        // its old origin to the new pointer position (the box appeared to
+        // shrink or vanish on the first eyedropper click).
+        drag.current = null;
         pickColor(p);
+        return;
+      }
+      // The text tool opens an inline editor at the click point. A
+      // `window.prompt` here returned null in the wry webview (WKWebView's
+      // UI delegate has no JS text panel), which silently ate every click.
+      if (tool === "text") {
+        if (!box) return;
+        drag.current = null;
+        setTextEdit({ at: p, value: "" });
         return;
       }
       if (!box) return;
       drag.current = { mode: "draw", start: p };
       setDraft(makeShape(tool, p, p));
     },
-    // pickColor / makeShape are stable enough through refs below
-    [box, busy, pos, tool],
+    // makeShape reads color/strokeWidth/filled/shapes — they must be listed or
+    // the callback keeps the values from the render it was last rebuilt on and
+    // new shapes get stale styles (and a frozen step counter).
+    [box, busy, color, filled, pickerFmt, pos, shapes, strokeWidth, tool],
   );
 
   const onMouseMove = useCallback(() => {
     const p = pos();
     const d = drag.current;
+
+    // A drag only makes sense while the tool that started it is still active.
+    // Switching tools mid-gesture (or a click that never got its mouseup) would
+    // otherwise resume a stale selection and resize the crop box under the
+    // cursor — the eyedropper's click appeared to destroy the selection.
+    const dragAllowed =
+      d !== null &&
+      (d.mode === "select" || d.mode === "move" || d.mode === "resize"
+        ? tool === "select"
+        : tool !== "select" && tool !== "picker");
+    if (d && !dragAllowed) {
+      drag.current = null;
+      setDraft(null);
+      if (tool === "picker") {
+        const seen = sampleAt(p);
+        setPicker(seen ? { x: p.x, y: p.y, ...seen } : null);
+        setCursor(PICKER_CURSOR);
+      }
+      return;
+    }
+
     if (!d) {
       if (tool === "picker") {
         const seen = sampleAt(p);
         setPicker(seen ? { x: p.x, y: p.y, ...seen } : null);
-        setCursor("crosshair");
+        setCursor(PICKER_CURSOR);
         return;
       }
       if (box && tool === "select") {
@@ -249,6 +340,13 @@ export function Overlay({ monitorId }: Props) {
     }
   }, [box, draft, pos, stageSize.h, stageSize.w, tool]);
 
+  // Diagnostic: the eyedropper UI vanished right after being selected, so record
+  // every tool transition together with the selection state that gates the
+  // toolbar. Compiled out of release builds (debug_report is a no-op there).
+  useEffect(() => {
+    void reportDebug("tool-change", { tool, box: box ? `${box.width}x${box.height}` : null });
+  }, [tool, box]);
+
   // The loupe only exists while the eyedropper is active.
   useEffect(() => {
     if (tool !== "picker") setPicker(null);
@@ -256,7 +354,9 @@ export function Overlay({ monitorId }: Props) {
 
   // Paint the magnifier: a 15x15 pixel window from the frozen frame, drawn
   // nearest-neighbour so every source pixel is a crisp square, with the picked
-  // pixel ringed in the middle.
+  // pixel ringed in the middle. Backing store and CSS size equal the HUD's
+  // inner width (15*9=135): a non-integer upscale left edge rows unpainted,
+  // and a canvas narrower than the panel left a dead strip beside it.
   useEffect(() => {
     if (!picker || tool !== "picker") return;
     const canvas = pickerCanvasRef.current;
@@ -268,8 +368,12 @@ export function Overlay({ monitorId }: Props) {
     const cells = 15;
     const size = canvas.width;
     const cell = size / cells;
-    const cx = Math.round(picker.x * ratio);
-    const cy = Math.round(picker.y * ratio);
+    const half = (cells - 1) / 2;
+    // Keep the whole window inside the frame: near an edge the window shifts
+    // instead of clipping, otherwise drawImage paints a proportionally smaller
+    // area and leaves the rest of the loupe blank.
+    const cx = Math.min(Math.max(Math.round(picker.x * ratio), half), sample.width - 1 - half);
+    const cy = Math.min(Math.max(Math.round(picker.y * ratio), half), sample.height - 1 - half);
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, size, size);
     ctx.drawImage(
@@ -314,8 +418,23 @@ export function Overlay({ monitorId }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Keys typed into the inline text editor belong to the editor, not to
+      // the global shortcuts (digits would switch tools mid-sentence).
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
+        // Leave the eyedropper first; a second Esc cancels the capture.
+        // Without this, exiting the picker also threw away the selection.
+        if (tool === "picker") {
+          setTool("select");
+          return;
+        }
+        // Busy means a capture action is in flight; cancelling underneath it
+        // would tear the session down while Rust is still encoding.
+        if (busy) return;
         void cancel();
         return;
       }
@@ -339,6 +458,51 @@ export function Overlay({ monitorId }: Props) {
         if (box) void confirm("copy");
         return;
       }
+      if (tool === "picker") {
+        // Shift cycles the loupe's notation: HEX → RGB → HSL. Same key
+        // Snipaste uses to flip between RGB and HEX under its magnifier.
+        if (e.key === "Shift") {
+          setPickerFmt((f) =>
+            PICKER_FMTS[(PICKER_FMTS.indexOf(f) + 1) % PICKER_FMTS.length],
+          );
+          return;
+        }
+        // Q (or C, Snipaste's key) copies what the loupe shows without a
+        // click. The Cmd/Ctrl combos returned earlier, so a bare key it is.
+        const k = e.key.toLowerCase();
+        if ((k === "q" || k === "c") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (picker) {
+            e.preventDefault();
+            copyPicked(picker);
+          }
+          return;
+        }
+      }
+      // T/F/J and R mirror the toolbar tooltips — they used to be advertised
+      // but never wired, i.e. dead keys.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && box && !busy) {
+        const k = e.key.toLowerCase();
+        if (k === "t") {
+          e.preventDefault();
+          void runAi("extract");
+          return;
+        }
+        if (k === "f") {
+          e.preventDefault();
+          void runAi("translate");
+          return;
+        }
+        if (k === "j") {
+          e.preventDefault();
+          void runAi("explain");
+          return;
+        }
+        if (k === "r") {
+          e.preventDefault();
+          void confirm("pin");
+          return;
+        }
+      }
       const mapped = TOOL_KEYS[e.key];
       if (mapped && !e.metaKey && !e.ctrlKey && !e.altKey) {
         setTool(mapped);
@@ -347,7 +511,7 @@ export function Overlay({ monitorId }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [box, busy, shapes]);
+  }, [box, busy, monitor, picker, pickerFmt, shapes, tool]);
 
   /* --------------------------------------------------------------- shapes */
 
@@ -366,11 +530,6 @@ export function Overlay({ monitorId }: Props) {
         return { ...base, kind: "mosaic", from, to, block: 12 };
       case "highlight":
         return { ...base, kind: "highlight", from, to };
-      case "text": {
-        const text = window.prompt("输入文字", "");
-        if (!text) return null;
-        return { ...base, kind: "text", at: from, text, fontSize: 18 };
-      }
       case "step":
         return {
           ...base,
@@ -417,39 +576,93 @@ export function Overlay({ monitorId }: Props) {
     }
   };
 
+  /** Close the inline editor; a non-empty value becomes a text shape. */
+  const commitText = (cancelled = false) => {
+    const edit = textEdit;
+    if (!edit) return;
+    setTextEdit(null);
+    const value = edit.value.trim();
+    if (cancelled || !value) return;
+    setShapes((prev) => [
+      ...prev,
+      { id: nextId(), color, kind: "text", at: edit.at, text: value, fontSize: 18 },
+    ]);
+  };
+
+  // Report any error that reaches the window, so a canvas SecurityError is
+  // visible in the terminal instead of silently blanking the UI.
+  useEffect(() => {
+    const onError = (e: ErrorEvent) => {
+      void reportDebug("overlay-error", `${e.message} @ ${e.filename}:${e.lineno}`);
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      void reportDebug("overlay-rejection", String(e.reason));
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+
   /** Read one pixel out of the cached frame copy. */
-  const sampleAt = (p: Point): { hex: string; rgb: string } | null => {
+  const sampleAt = (p: Point): Rgb | null => {
     const sample = sampleRef.current;
     if (!sample || !monitor) return null;
     const ratio = sample.width / monitor.width;
     const px = Math.min(Math.max(Math.round(p.x * ratio), 0), sample.width - 1);
     const py = Math.min(Math.max(Math.round(p.y * ratio), 0), sample.height - 1);
-    const data = sample
-      .getContext("2d", { willReadFrequently: true })
-      ?.getImageData(px, py, 1, 1).data;
-    if (!data) return null;
-    const hex = `#${[data[0], data[1], data[2]]
-      .map((v) => v.toString(16).padStart(2, "0"))
-      .join("")}`;
-    return { hex, rgb: `rgb(${data[0]}, ${data[1]}, ${data[2]})` };
+    // `getImageData` throws SecurityError when the canvas is tainted (the frame
+    // is served over the `asset:` scheme). This runs from the pointer handler,
+    // so an uncaught throw bubbles out of the React tree and used to take the
+    // whole capture UI down mid-gesture — the selection box "vanished" while
+    // merely moving the mouse over the picture.
+    let data: Uint8ClampedArray;
+    try {
+      const ctx = sample.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      data = ctx.getImageData(px, py, 1, 1).data;
+    } catch (e) {
+      // A tainted frame can never be sampled: drop it so the loupe stops trying
+      // instead of throwing on every mouse move.
+      sampleRef.current = null;
+      void reportDebug("picker-sample-blocked", String(e));
+      return null;
+    }
+    return { r: data[0], g: data[1], b: data[2] };
+  };
+
+  /** Copy the sampled colour in the notation the loupe currently shows. */
+  const copyPicked = (seen: Rgb) => {
+    const text = fmtColor(seen, pickerFmt);
+    setToast(`已复制 ${text}`);
+    void api.copyText(text).catch((e: unknown) => {
+      void reportDebug("picker-copy-failed", String(e));
+    });
   };
 
   const pickColor = (p: Point) => {
     const seen = sampleAt(p);
+    // Reported through the debug channel so a terminal can confirm what the
+    // webview actually did: without it a click that never reached the handler
+    // and a click that failed to sample look identical from the outside.
+    void reportDebug("picker-pick", {
+      x: Math.round(p.x),
+      y: Math.round(p.y),
+      sampled: seen ? toHex(seen) : null,
+    });
     if (!seen) return;
-    setColor(seen.hex);
-    setToast(`已取色 ${seen.hex.toUpperCase()}`);
-    void api.copyText(seen.hex).catch(() => undefined);
+    setColor(toHex(seen));
+    copyPicked(seen);
   };
 
   /* --------------------------------------------------------------- output */
 
   /** Flatten annotations into a transparent PNG sized like the selection. */
   const renderOverlay = (): string | null => {
-    const stage = stageRef.current;
-    if (!stage || !box) return null;
-    const layer = stage.getLayers()[1];
-    if (!layer) return null;
+    const layer = annotationLayerRef.current;
+    if (!layer || !box) return null;
 
     const ratio = window.devicePixelRatio || 1;
     const dataUrl = layer.toDataURL({
@@ -473,8 +686,25 @@ export function Overlay({ monitorId }: Props) {
     }
     setBusy(true);
     try {
+      let savePath: string | null = null;
+      if (action === "save") {
+        // The reference tool saves through the native dialog; cancelling it
+        // cancels the whole capture (nothing is written anywhere).
+        const stamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const name = `xw_${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(
+          stamp.getDate(),
+        )}${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}.png`;
+        const picked = await api.saveAsDialog(name);
+        if (picked === null) {
+          await api.cancelCapture();
+          reset();
+          return;
+        }
+        savePath = picked;
+      }
       const overlay = renderOverlay();
-      const result = await api.confirmCapture(monitor.id, box, action, overlay);
+      const result = await api.confirmCapture(monitor.id, box, action, overlay, savePath);
       if (result.message) setToast(result.message);
 
       if (action === "pin") {
@@ -491,12 +721,22 @@ export function Overlay({ monitorId }: Props) {
     }
   };
 
+  /** Last time an AI action fired, for the reference tool's 500ms debounce. */
+  const lastAiAt = useRef(0);
+
   const runAi = async (action: AiAction) => {
     if (!box || !monitor || busy) return;
+    // The reference bar throttles each AI button to one request per 500ms;
+    // double-clicks used to fire two crops here.
+    const now = Date.now();
+    if (now - lastAiAt.current < 500) return;
+    lastAiAt.current = now;
     setBusy(true);
     try {
       const overlay = renderOverlay();
-      const result = await api.confirmCapture(monitor.id, box, "copy", overlay);
+      // "ask" crops for the chat window only: no clipboard write, no gallery
+      // auto-save, exactly like the reference's AI path.
+      const result = await api.confirmCapture(monitor.id, box, "ask", overlay);
       // The chat window owns the streaming UI; hand it the crop and the action
       // so it can start the request without another click.
       await api.openChat(result.cropId, action);
@@ -510,6 +750,9 @@ export function Overlay({ monitorId }: Props) {
   };
 
   const cancel = async () => {
+    // A capture action may be mid-flight; tearing the session down under it
+    // leaves Rust writing into a closed session.
+    if (busy) return;
     reset();
     try {
       await api.cancelCapture();
@@ -527,7 +770,10 @@ export function Overlay({ monitorId }: Props) {
 
   /* ----------------------------------------------------------------- view */
 
-  const cursor = tool === "select" ? "crosshair" : "crosshair";
+  // The eyedropper gets its own pipette cursor. Every other tool leaves this
+  // undefined so the per-move `document.body` cursor set from `onMouseMove`
+  // (resize arrows, crosshair) is not overridden by an inline root value.
+  const cursor = tool === "picker" ? PICKER_CURSOR : undefined;
 
   return (
     <div className="overlay-root" style={{ cursor }} onContextMenu={(e) => e.preventDefault()}>
@@ -550,8 +796,10 @@ export function Overlay({ monitorId }: Props) {
       >
         {/* Layer 0: annotations only. The frozen desktop is a DOM <img>
             underneath the stage, so `toDataURL` on this layer yields a
-            transparent annotation PNG with no screenshot baked in. */}
-        <Layer>
+            transparent annotation PNG with no screenshot baked in.
+            `annotationLayerRef` is what export uses — keep it on this layer if
+            more layers are ever added. */}
+        <Layer ref={annotationLayerRef}>
           {shapes.map((s) => (
             <ShapeNode key={s.id} shape={s} source={sourceRef.current} />
           ))}
@@ -638,28 +886,62 @@ export function Overlay({ monitorId }: Props) {
         <div
           className="picker-hud"
           style={{
-            left: Math.min(picker.x + 20, stageSize.w - 146),
+            left: Math.min(picker.x + 20, stageSize.w - 170),
             top:
-              picker.y + 20 + 168 > stageSize.h
-                ? Math.max(8, picker.y - 168)
+              picker.y + 20 + 200 > stageSize.h
+                ? Math.max(8, picker.y - 200)
                 : picker.y + 20,
           }}
         >
           <canvas
             ref={pickerCanvasRef}
             className="picker-zoom"
-            width={105}
-            height={105}
+            width={135}
+            height={135}
           />
           <div className="picker-meta">
-            <span className="picker-swatch" style={{ background: picker.hex }} />
+            <span className="picker-swatch" style={{ background: toHex(picker) }} />
             <div className="picker-values">
-              <code className="picker-hex">{picker.hex.toUpperCase()}</code>
-              <span className="picker-rgb">{picker.rgb}</span>
+              <code className="picker-hex">{fmtColor(picker, pickerFmt)}</code>
+              <span className="picker-rgb">
+                {fmtColor(picker, pickerFmt === "hex" ? "rgb" : "hex")}
+              </span>
             </div>
           </div>
-          <div className="picker-hint">点击复制 HEX</div>
+          <div className="picker-hint">Shift 换格式 · 点击/Q 复制</div>
         </div>
+      )}
+
+      {textEdit && (
+        <textarea
+          className="overlay-text-input"
+          style={{ left: textEdit.at.x, top: textEdit.at.y, color }}
+          value={textEdit.value}
+          autoFocus
+          rows={1}
+          spellCheck={false}
+          placeholder="输入文字"
+          onChange={(e) => {
+            setTextEdit({ ...textEdit, value: e.target.value });
+            // Grow with the text; a fixed rows=1 would clip anything past
+            // the first line.
+            e.target.style.height = "auto";
+            e.target.style.height = `${e.target.scrollHeight}px`;
+          }}
+          onBlur={() => commitText()}
+          onKeyDown={(e) => {
+            // The window-level shortcut handler must not see editor keys.
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              commitText();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              commitText(true);
+            }
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
       )}
 
       {menu && box && (
@@ -704,6 +986,70 @@ const HANDPOS: Array<{ handle: string; dx: number; dy: number }> = [
   { handle: "sw", dx: 0, dy: 1 },
   { handle: "w", dx: 0, dy: 0.5 },
 ];
+
+type Rgb = { r: number; g: number; b: number };
+
+/** Notations the loupe can show; Shift cycles through them in this order. */
+type PickerFmt = "hex" | "rgb" | "hsl";
+const PICKER_FMTS: PickerFmt[] = ["hex", "rgb", "hsl"];
+
+function toHex({ r, g, b }: Rgb): string {
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Render the sample for display and the clipboard; hex is uppercased. */
+function fmtColor(c: Rgb, fmt: PickerFmt): string {
+  switch (fmt) {
+    case "hex":
+      return toHex(c).toUpperCase();
+    case "rgb":
+      return `rgb(${c.r} ${c.g} ${c.b})`;
+    case "hsl": {
+      const { h, s, l } = rgbToHsl(c);
+      return `hsl(${h} ${s}% ${l}%)`;
+    }
+  }
+}
+
+function rgbToHsl({ r, g, b }: Rgb): { h: number; s: number; l: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = Math.round(((max + min) / 2) * 100);
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = Math.round((l > 50 ? d / (2 - max - min) : d / (max + min)) * 100);
+  let h: number;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6;
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6;
+  else h = ((rn - gn) / d + 4) / 6;
+  return { h: Math.round(h * 360), s, l };
+}
+
+/** Eyedropper cursor used while the picker tool is active.
+ *
+ * The pipette glyph points down-left, so its tip is the hotspot at (2, 20)
+ * inside the 22px cursor box: the sampled pixel sits exactly under the tip.
+ *
+ * Inlined as a base64 data URL because CSS `url()` cannot carry the quotes an
+ * inline SVG needs, and the picker must work without fetching an asset.
+ */
+const PICKER_CURSOR =
+  'url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMiIgaGVpZ2h0PSIyMiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIj48ZyBzdHJva2U9IiNmZmYiIHN0cm9rZS13aWR0aD0iNC4yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Im0yIDIyIDEtMWgzbDktOSIvPjxwYXRoIGQ9Ik0zIDIxdi0zbDktOSIvPjxwYXRoIGQ9Im0xNSA2IDMuNC0zLjRhMi4xIDIuMSAwIDEgMSAzIDNMMTggOWwuNC40YTIuMSAyLjEgMCAxIDEtMyAzbC0zLjgtMy44YTIuMSAyLjEgMCAxIDEgMy0zbC40LjRaIi8+PC9nPjxnIHN0cm9rZT0iIzE1MTYxYSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Im0yIDIyIDEtMWgzbDktOSIvPjxwYXRoIGQ9Ik0zIDIxdi0zbDktOSIvPjxwYXRoIGQ9Im0xNSA2IDMuNC0zLjRhMi4xIDIuMSAwIDEgMSAzIDNMMTggOWwuNC40YTIuMSAyLjEgMCAxIDEtMyAzbC0zLjgtMy44YTIuMSAyLjEgMCAxIDEgMy0zbC40LjRaIi8+PC9nPjwvc3ZnPg==") 2 20, crosshair';
+
+/** Send a diagnostic line to the Rust log (compiled out of release builds). */
+function reportDebug(stage: string, detail: unknown) {
+  void import("@tauri-apps/api/core")
+    .then((m) =>
+      m.invoke("debug_report", {
+        stage,
+        detail: typeof detail === "string" ? detail : JSON.stringify(detail),
+      }),
+    )
+    .catch(() => undefined);
+}
 
 function setCursor(cursor: string) {
   document.body.style.cursor = cursor;
