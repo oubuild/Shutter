@@ -105,6 +105,8 @@ export const api = {
     action: CaptureAction,
     overlayDataUrl: string | null,
     savePath?: string | null,
+    /** AI preset to auto-run ("ask" action only); Rust opens the chat window. */
+    aiAction?: string | null,
   ) =>
     invoke<CaptureResult>("confirm_capture", {
       monitorId,
@@ -112,6 +114,7 @@ export const api = {
       action,
       overlayDataUrl,
       savePath: savePath ?? null,
+      aiAction: aiAction ?? null,
     }),
   aiAsk: (request: AiRequest, requestId: string) =>
     invoke<void>("ai_ask", { request, requestId }),

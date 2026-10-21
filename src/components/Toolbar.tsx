@@ -4,11 +4,31 @@
  * 8px radius, 8px gaps, dividers between groups, and `#1b77ff` for the active
  * tool. Every control carries a `title` so name and shortcut stay discoverable
  * on hover.
+ *
+ * Parameters follow the reference model (`.tmp/analysis/toolbar-diff.md` §D2b):
+ * the bar itself has **no** persistent colour chip, width slider or fill toggle.
+ * Selecting a tool opens that tool's parameter bubble — a second 44px bar that
+ * docks under (or, near the bottom edge, above) the toolbar. Bubble contents
+ * differ per tool and come from `TOOL_PANELS` below.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { PALETTE, TOOL_LABELS, type ToolId } from "../canvas/model";
+import {
+  ARROW_HEADS,
+  DASH_PATTERNS,
+  HIGHLIGHT_SHAPES,
+  MOSAIC_MODES,
+  MOSAIC_PIXEL_MAX,
+  MOSAIC_PIXEL_MIN,
+  PALETTE,
+  STROKE_DOT_SIZES,
+  STROKE_WIDTHS,
+  TEXT_SIZES,
+  TOOL_LABELS,
+  type ToolId,
+  type ToolStyle,
+} from "../canvas/model";
 
 export type ToolbarAction =
   | "copy"
@@ -24,15 +44,13 @@ type Props = {
   /** Selection box in CSS px; the toolbar docks below/above it. */
   box: { x: number; y: number; width: number; height: number } | null;
   tool: ToolId;
-  color: string;
-  strokeWidth: number;
-  filled: boolean;
+  /** Every per-tool drawing parameter (shared with the canvas). */
+  style: ToolStyle;
   canUndo: boolean;
   busy: boolean;
   onTool: (tool: ToolId) => void;
-  onColor: (color: string) => void;
-  onStrokeWidth: (width: number) => void;
-  onFilled: (filled: boolean) => void;
+  /** Patch one or more drawing parameters. */
+  onStyle: (patch: Partial<ToolStyle>) => void;
   onUndo: () => void;
   onAction: (action: ToolbarAction) => void;
 };
@@ -66,14 +84,39 @@ const OUT_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
   { id: "copy", label: "复制", key: "⏎" },
 ];
 
+/** Tools that own a parameter bubble, and how it is composed (reference `pi()`). */
+type PanelKind =
+  | "stroke-color"
+  | "stroke-color-round-filled"
+  | "stroke-color-filled"
+  | "text-size-color"
+  | "arrow"
+  | "mosaic"
+  | "highlight"
+  | "step";
+
+const TOOL_PANELS: Partial<Record<ToolId, PanelKind>> = {
+  rect: "stroke-color-round-filled",
+  ellipse: "stroke-color-filled",
+  arrow: "arrow",
+  pen: "stroke-color",
+  mosaic: "mosaic",
+  text: "text-size-color",
+  highlight: "highlight",
+  step: "step",
+};
+
 const TOOLBAR_H = 44;
+const BUBBLE_H = 44;
 const GAP = 8;
+/** Reference flips the bubble up when the bar's bottom is within 82px of the
+ *  viewport bottom (bubble height + gap + slack). */
+const FLIP_THRESHOLD = 82;
 
 export function Toolbar(props: Props) {
-  const { box, tool, color, strokeWidth, filled } = props;
+  const { box, tool, style } = props;
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Dock below the selection, flipping above when there is no room. The bar
   // only enters the DOM once `pos` is set, so the first pass places with the
@@ -133,13 +176,13 @@ export function Toolbar(props: Props) {
     if (!el) return;
     reported.current = true;
     const icon = el.querySelector(".cap-icon") as HTMLElement | null;
-    const primary = el.querySelector(".cap-icon.primary") as HTMLElement | null;
+    const active = el.querySelector(".cap-icon.active") as HTMLElement | null;
     if (!icon) return;
     invoke("debug_report", {
       stage: "toolbar-style",
       detail: JSON.stringify({
         iconColor: getComputedStyle(icon).color,
-        primaryBg: primary ? getComputedStyle(primary).backgroundColor : null,
+        activeColor: active ? getComputedStyle(active).color : null,
         barColor: getComputedStyle(el).color,
         size: [el.offsetWidth, el.offsetHeight],
         rect: [Math.round(el.getBoundingClientRect().left), Math.round(el.getBoundingClientRect().top)],
@@ -153,6 +196,11 @@ export function Toolbar(props: Props) {
   }, [pos?.left, pos?.top]);
 
   if (!box || !pos) return null;
+
+  const panel = TOOL_PANELS[tool];
+  // Reference: `bottom + 82 > innerHeight` ⇒ bubble above the bar.
+  const bubbleAbove = pos.top + TOOLBAR_H + FLIP_THRESHOLD > window.innerHeight;
+  const bubbleTop = bubbleAbove ? -(BUBBLE_H + 4) : TOOLBAR_H + 3;
 
   return (
     <div
@@ -172,55 +220,6 @@ export function Toolbar(props: Props) {
           />
         ))}
       </div>
-
-      <span className="cap-sep" />
-
-      <div className="cap-swatches">
-        <button
-          className="cap-color"
-          style={{ background: color }}
-          title={`颜色 ${color}`}
-          aria-label={`颜色 ${color}`}
-          onClick={() => setPaletteOpen((v) => !v)}
-        />
-        {paletteOpen && (
-          <div className="cap-palette" onMouseLeave={() => setPaletteOpen(false)}>
-            {PALETTE.map((c) => (
-              <button
-                key={c}
-                className={`cap-dot ${c === color ? "active" : ""}`}
-                style={{ background: c }}
-                title={c}
-                aria-label={c}
-                onClick={() => {
-                  props.onColor(c);
-                  setPaletteOpen(false);
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <input
-        className="cap-width"
-        type="range"
-        min={1}
-        max={12}
-        value={strokeWidth}
-        title={`粗细 ${strokeWidth}px`}
-        aria-label="粗细"
-        onChange={(e) => props.onStrokeWidth(Number(e.target.value))}
-      />
-
-      {(tool === "rect" || tool === "ellipse") && (
-        <IconButton
-          title="填充"
-          active={filled}
-          svg={ICONS.fill}
-          onClick={() => props.onFilled(!filled)}
-        />
-      )}
 
       <span className="cap-sep" />
 
@@ -262,8 +261,444 @@ export function Toolbar(props: Props) {
         svg={ICONS.cancel}
         onClick={() => props.onAction("cancel")}
       />
+
+      {panel && (
+        <div
+          className="cap-bubble"
+          data-cap="bubble"
+          data-tool={tool}
+          data-placement={bubbleAbove ? "top" : "bottom"}
+          style={{ top: bubbleTop }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <ToolPanel kind={panel} style={style} onStyle={props.onStyle} />
+        </div>
+      )}
     </div>
   );
+}
+
+/** Contents of one tool's parameter bubble (reference `pi()` dispatch). */
+function ToolPanel({
+  kind,
+  style,
+  onStyle,
+}: {
+  kind: PanelKind;
+  style: ToolStyle;
+  onStyle: (patch: Partial<ToolStyle>) => void;
+}) {
+  const stroke = <StrokeDots style={style} onStyle={onStyle} />;
+  const palette = (
+    <>
+      <span className="cap-sep" />
+      <Palette style={style} onStyle={onStyle} />
+    </>
+  );
+
+  switch (kind) {
+    case "stroke-color":
+      return (
+        <>
+          {stroke}
+          {palette}
+        </>
+      );
+    case "stroke-color-filled":
+      return (
+        <>
+          {stroke}
+          {palette}
+          <span className="cap-sep" />
+          <CheckToggle
+            label="实心"
+            checked={style.filled}
+            onChange={(v) => onStyle({ filled: v })}
+          />
+        </>
+      );
+    case "stroke-color-round-filled":
+      return (
+        <>
+          {stroke}
+          {palette}
+          <span className="cap-sep" />
+          <CheckToggle
+            label="圆角"
+            checked={style.rounded}
+            onChange={(v) => onStyle({ rounded: v })}
+          />
+          <CheckToggle
+            label="实心"
+            checked={style.filled}
+            onChange={(v) => onStyle({ filled: v })}
+          />
+        </>
+      );
+    case "text-size-color":
+      return (
+        <>
+          <TextSizes style={style} onStyle={onStyle} />
+          {palette}
+        </>
+      );
+    case "arrow":
+      return (
+        <>
+          <Select
+            label="箭头样式"
+            value={style.arrowHead}
+            options={ARROW_HEADS.map((h) => ({ value: h.id, label: h.label }))}
+            onChange={(v) => onStyle({ arrowHead: v as ToolStyle["arrowHead"] })}
+          />
+          <Select
+            label="虚线样式"
+            value={dashIdOf(style.arrowDash)}
+            options={DASH_PATTERNS.map((d) => ({ value: d.id, label: d.label }))}
+            onChange={(v) =>
+              onStyle({ arrowDash: DASH_PATTERNS.find((d) => d.id === v)?.value ?? [] })
+            }
+          />
+          <span className="cap-sep" />
+          {stroke}
+          {palette}
+        </>
+      );
+    case "mosaic":
+      return (
+        <>
+          <Segmented
+            label="模式"
+            value={style.mosaicMode}
+            options={MOSAIC_MODES.map((m) => ({ value: m.id, label: m.label }))}
+            onChange={(v) => onStyle({ mosaicMode: v as ToolStyle["mosaicMode"] })}
+          />
+          {/* Reference: changing the width preset also drops rectangle mode,
+              and the dots are not lit while it is on. */}
+          <StrokeDots
+            style={style}
+            dim={style.mosaicRect}
+            onStyle={(patch) => onStyle({ ...patch, mosaicRect: false })}
+          />
+          <Segmented
+            label="选区"
+            value={style.mosaicRect ? "rect" : "free"}
+            options={[
+              { value: "free", label: "自由涂" },
+              { value: "rect", label: "矩形" },
+            ]}
+            onChange={(v) => onStyle({ mosaicRect: v === "rect" })}
+          />
+          <span className="cap-sep" />
+          <Slider
+            label="像素"
+            min={MOSAIC_PIXEL_MIN}
+            max={MOSAIC_PIXEL_MAX}
+            step={1}
+            value={style.mosaicPixel}
+            onChange={(v) => onStyle({ mosaicPixel: v })}
+          />
+        </>
+      );
+    case "highlight":
+      return (
+        <>
+          <Segmented
+            label="形状"
+            value={style.highlightShape}
+            options={HIGHLIGHT_SHAPES.map((h) => ({ value: h.id, label: h.label }))}
+            onChange={(v) => onStyle({ highlightShape: v as ToolStyle["highlightShape"] })}
+          />
+          <span className="cap-sep" />
+          <Slider
+            label="不透明度"
+            min={0}
+            max={1}
+            step={0.1}
+            value={style.highlightOpacity}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => onStyle({ highlightOpacity: v })}
+          />
+          <Slider
+            label="模糊"
+            min={1}
+            max={10}
+            step={1}
+            value={style.highlightBlur}
+            onChange={(v) => onStyle({ highlightBlur: v })}
+          />
+        </>
+      );
+    case "step":
+      return (
+        <>
+          {stroke}
+          {palette}
+          <span className="cap-sep" />
+          <NumberField
+            label="序号"
+            min={1}
+            max={99}
+            value={style.stepNext}
+            onChange={(v) => onStyle({ stepNext: v })}
+          />
+        </>
+      );
+  }
+}
+
+/** Three stroke-width presets drawn as dots, mirroring the reference `Ql`. */
+function StrokeDots({
+  style,
+  dim,
+  onStyle,
+}: {
+  style: ToolStyle;
+  dim?: boolean;
+  onStyle: (patch: Partial<ToolStyle>) => void;
+}) {
+  return (
+    <div className="cap-dots" data-cap="stroke" data-dim={dim ? "1" : "0"}>
+      {STROKE_WIDTHS.map((width, idx) => {
+        const dot = STROKE_DOT_SIZES[idx];
+        return (
+          <button
+            key={width}
+            className={`cap-stroke ${idx === style.strokeIdx && !dim ? "active" : ""}`}
+            title={`线宽 ${width}px`}
+            aria-label={`线宽 ${width}px`}
+            aria-pressed={idx === style.strokeIdx}
+            onClick={() => onStyle({ strokeIdx: idx })}
+          >
+            <span style={{ width: dot, height: dot }} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Three text-size presets (reference `tn`: 14/24/36). */
+function TextSizes({
+  style,
+  onStyle,
+}: {
+  style: ToolStyle;
+  onStyle: (patch: Partial<ToolStyle>) => void;
+}) {
+  return (
+    <div className="cap-dots" data-cap="text-size">
+      {TEXT_SIZES.map((size, idx) => (
+        <button
+          key={size}
+          className={`cap-size-btn ${idx === style.textSizeIdx ? "active" : ""}`}
+          title={`字号 ${size}`}
+          aria-label={`字号 ${size}`}
+          aria-pressed={idx === style.textSizeIdx}
+          style={{ fontSize: 11 + idx * 5 }}
+          onClick={() => onStyle({ textSizeIdx: idx })}
+        >
+          A
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The 7 fixed reference colours; `#FFFFFF` gets a hairline so it stays visible. */
+function Palette({
+  style,
+  onStyle,
+}: {
+  style: ToolStyle;
+  onStyle: (patch: Partial<ToolStyle>) => void;
+}) {
+  return (
+    <div className="cap-palette-row" data-cap="palette">
+      {PALETTE.map((c) => (
+        <button
+          key={c}
+          className={`cap-dot ${c === style.color ? "active" : ""}`}
+          style={{
+            background: c,
+            borderColor: c === "#FFFFFF" ? "rgba(0,0,0,.1)" : undefined,
+          }}
+          title={c}
+          aria-label={c}
+          aria-pressed={c === style.color}
+          onClick={() => onStyle({ color: c })}
+        />
+      ))}
+    </div>
+  );
+}
+
+function CheckToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      className={`cap-check ${checked ? "active" : ""}`}
+      title={label}
+      aria-label={label}
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="cap-check-box" aria-hidden="true">
+        {checked && <CheckGlyph />}
+      </span>
+      {label}
+    </button>
+  );
+}
+
+function Segmented({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="cap-seg" role="group" aria-label={label} data-cap="segmented">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          className={`cap-seg-btn ${o.value === value ? "active" : ""}`}
+          title={o.label}
+          aria-label={o.label}
+          aria-pressed={o.value === value}
+          onClick={() => onChange(o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Select({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select
+      className="cap-select"
+      title={label}
+      aria-label={label}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Slider({
+  label,
+  min,
+  max,
+  step,
+  value,
+  format,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  format?: (v: number) => string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="cap-slider" title={label}>
+      <span className="cap-slider-label">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <span className="cap-slider-value">{format ? format(value) : value}</span>
+    </label>
+  );
+}
+
+function NumberField({
+  label,
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="cap-num" title={label}>
+      <span>{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        aria-label={label}
+        onChange={(e) => {
+          // Reference clamps to 1..99 rather than rejecting the edit.
+          const n = Number(e.target.value);
+          if (Number.isNaN(n)) return;
+          onChange(Math.max(min, Math.min(max, Math.round(n))));
+        }}
+      />
+    </label>
+  );
+}
+
+function CheckGlyph() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 6.2 5 8.6l4.5-5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Dash id for a pattern; unknown patterns fall back to solid. */
+function dashIdOf(dash: number[]): string {
+  return DASH_PATTERNS.find((d) => d.value.join(",") === dash.join(","))?.id ?? "solid";
 }
 
 function IconButton({
@@ -285,6 +720,7 @@ function IconButton({
       className={cls}
       title={title}
       aria-label={title}
+      aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
       // Icons are static in-repo SVG strings; no user input reaches this.

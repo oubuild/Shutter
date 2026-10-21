@@ -8,12 +8,23 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Toolbar, type ToolbarAction } from "../components/Toolbar";
 import { ShapeNode } from "../canvas/ShapeNode";
 import {
+  DEFAULT_TOOL_STYLE,
+  MOSAIC_PIXEL_MAX,
+  MOSAIC_PIXEL_MIN,
+  STROKE_WIDTHS,
+  TEXT_SIZES,
   TOOL_KEYS,
+  clampIndex,
+  mosaicBlockOf,
+  moveShape,
   nextId,
-  nextStepIndex,
+  stepDiameterOf,
+  strokeWidthOf,
+  textSizeOf,
   type Point,
   type Shape,
   type ToolId,
+  type ToolStyle,
 } from "../canvas/model";
 import {
   api,
@@ -40,10 +51,14 @@ type Drag =
   | { mode: "select"; start: Point }
   | { mode: "move"; grab: Point; origin: Box }
   | { mode: "resize"; handle: Exclude<Handle, null | "move">; origin: Box }
-  | { mode: "draw"; start: Point };
+  | { mode: "draw"; start: Point }
+  | { mode: "shape"; id: string; grab: Point; origin: Shape };
 
-/** Reference default: the same red the original tool draws with. */
-const DEFAULT_COLOR = "#F22B24";
+/** Inline text editor: `id` is set when re-editing an existing text shape. */
+type TextEdit = { at: Point; value: string; id?: string; style?: ToolStyle };
+
+/** Opacity step for the wheel, mirroring the reference `I@394891`. */
+const WHEEL_OPACITY_STEP = 0.1;
 
 export function Overlay({ monitorId }: Props) {
   const [monitor, setMonitor] = useState<MonitorInfo | null>(null);
@@ -52,19 +67,24 @@ export function Overlay({ monitorId }: Props) {
 
   const [box, setBox] = useState<Box | null>(null);
   const [tool, setTool] = useState<ToolId>("select");
-  const [color, setColor] = useState(DEFAULT_COLOR);
-  const [strokeWidth, setStrokeWidth] = useState(3);
-  const [filled, setFilled] = useState(false);
+  /** Every per-tool drawing parameter; the toolbar's bubbles edit this. */
+  const [style, setStyle] = useState<ToolStyle>(DEFAULT_TOOL_STYLE);
   const [shapes, setShapes] = useState<Shape[]>([]);
   const [draft, setDraft] = useState<Shape | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [menu, setMenu] = useState<Point | null>(null);
   /** Inline text editor: open at the click point while the text tool is used. */
-  const [textEdit, setTextEdit] = useState<{ at: Point; value: string } | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
+
+  /** Patch drawing parameters; a fresh object each time so React re-renders. */
+  const patchStyle = useCallback((patch: Partial<ToolStyle>) => {
+    setStyle((prev) => ({ ...prev, ...patch }));
+  }, []);
 
   const drag = useRef<Drag | null>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   /**
    * The annotation layer, held directly.
    *
@@ -221,14 +241,21 @@ export function Overlay({ monitorId }: Props) {
       // Moving/resizing belongs to the select tool. Without this gate a
       // drawing tool pressed inside the selection grabbed the box and moved it,
       // which is why annotations only worked outside the screenshot area.
+      // Shapes take precedence over moving the crop box: dragging a committed
+      // annotation is the expected action when the cursor is on one.
       if (box && tool === "select") {
         const handle = hitHandle(box, p);
-        if (handle === "move") {
-          drag.current = { mode: "move", grab: p, origin: box };
+        if (handle && handle !== "move") {
+          drag.current = { mode: "resize", handle, origin: box };
           return;
         }
-        if (handle) {
-          drag.current = { mode: "resize", handle, origin: box };
+        const hit = hitShape(shapes, p);
+        if (hit) {
+          drag.current = { mode: "shape", id: hit.id, grab: p, origin: hit };
+          return;
+        }
+        if (handle === "move") {
+          drag.current = { mode: "move", grab: p, origin: box };
           return;
         }
       }
@@ -256,17 +283,37 @@ export function Overlay({ monitorId }: Props) {
       if (tool === "text") {
         if (!box) return;
         drag.current = null;
-        setTextEdit({ at: p, value: "" });
+        // The browser's default mousedown action focuses the click target —
+        // the Konva stage container (tabindex=0) — AFTER React has mounted
+        // and autoFocus'd the editor, stealing the caret. The reference
+        // defers opening its editor for the same reason.
+        e.evt.preventDefault();
+        // Clicking an existing text shape re-opens it instead of stacking a
+        // new one on top; its own font size and colour win while editing.
+        const existing = textShapeAt(shapes, p);
+        if (existing) {
+          setTextEdit({
+            at: existing.at,
+            value: existing.text,
+            id: existing.id,
+            style: { ...style, color: existing.color, textSizeIdx: sizeIndex(existing.fontSize) },
+          });
+          return;
+        }
+        // The reference places the first line at the click point:
+        // x - fontSize/4, y - fontSize + 1.
+        const textSize = textSizeOf(style);
+        setTextEdit({ at: { x: p.x - textSize / 4, y: p.y - textSize + 1 }, value: "" });
         return;
       }
       if (!box) return;
       drag.current = { mode: "draw", start: p };
       setDraft(makeShape(tool, p, p));
     },
-    // makeShape reads color/strokeWidth/filled/shapes — they must be listed or
-    // the callback keeps the values from the render it was last rebuilt on and
-    // new shapes get stale styles (and a frozen step counter).
-    [box, busy, color, filled, pickerFmt, pos, shapes, strokeWidth, tool],
+    // makeShape reads style/shapes — they must be listed or the callback keeps
+    // the values from the render it was last rebuilt on and new shapes get
+    // stale styles (and a frozen step counter).
+    [box, busy, pickerFmt, pos, shapes, style, tool],
   );
 
   const onMouseMove = useCallback(() => {
@@ -279,7 +326,7 @@ export function Overlay({ monitorId }: Props) {
     // cursor — the eyedropper's click appeared to destroy the selection.
     const dragAllowed =
       d !== null &&
-      (d.mode === "select" || d.mode === "move" || d.mode === "resize"
+      (d.mode === "select" || d.mode === "move" || d.mode === "resize" || d.mode === "shape"
         ? tool === "select"
         : tool !== "select" && tool !== "picker");
     if (d && !dragAllowed) {
@@ -301,8 +348,13 @@ export function Overlay({ monitorId }: Props) {
         return;
       }
       if (box && tool === "select") {
-        const cursor = cursorFor(hitHandle(box, p));
-        setCursor(cursor);
+        // A committed shape under the cursor drags it (the reference's
+        // "select and move"); only empty space moves/resizes the crop.
+        if (hitShape(shapes, p)) {
+          setCursor("move");
+          return;
+        }
+        setCursor(cursorFor(hitHandle(box, p)));
       } else {
         setCursor("crosshair");
       }
@@ -337,8 +389,19 @@ export function Overlay({ monitorId }: Props) {
         setBox(resizeBox(d.origin, d.handle, p, stageSize.w, stageSize.h));
         break;
       }
+      case "shape": {
+        // Translate from the grabbed snapshot, not incrementally, so a fast
+        // drag never accumulates rounding drift.
+        const dx = p.x - d.grab.x;
+        const dy = p.y - d.grab.y;
+        setShapes((prev) =>
+          prev.map((s) => (s.id === d.id ? moveShape(d.origin, dx, dy) : s)),
+        );
+        setCursor("move");
+        break;
+      }
     }
-  }, [box, draft, pos, stageSize.h, stageSize.w, tool]);
+  }, [box, draft, pos, shapes, stageSize.h, stageSize.w, tool]);
 
   // Diagnostic: the eyedropper UI vanished right after being selected, so record
   // every tool transition together with the selection state that gates the
@@ -405,14 +468,137 @@ export function Overlay({ monitorId }: Props) {
       return;
     }
     if (d.mode === "draw" && draft) {
-      if (isShapeUsable(draft)) setShapes((prev) => [...prev, draft]);
+      if (isShapeUsable(draft)) {
+        setShapes((prev) => [...prev, draft]);
+        // Reference increments the badge counter on creation, so the next
+        // number follows the one just placed.
+        if (draft.kind === "step") {
+          patchStyle({ stepNext: Math.min(99, draft.index + 1) });
+        }
+      }
       setDraft(null);
     }
-  }, [box, draft]);
+  }, [box, draft, patchStyle]);
 
+  /** Re-open a committed text shape for editing (reference: editable text). */
   const onDblClick = useCallback(() => {
-    if (box) confirm("copy");
-  }, [box]);
+    const p = pos();
+    // A double-click on a text shape edits it; anywhere else keeps the
+    // reference's "double-click = copy" behaviour. Editing text must not
+    // trigger a copy, or the caret would land on a destroyed webview.
+    const hit = textShapeAt(shapes, p);
+    if (hit) {
+      setTextEdit({
+        at: hit.at,
+        value: hit.text,
+        id: hit.id,
+        style: { ...style, color: hit.color, textSizeIdx: sizeIndex(hit.fontSize) },
+      });
+      return;
+    }
+    if (box) void confirm("copy");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [box, pos, shapes, style]);
+
+  /**
+   * Wheel adjusts the parameter of whatever the pointer is over (reference
+   * `I@394891`): text → its font size preset, mosaic → pixel strength,
+   * highlight → wash opacity, everything else → stroke width. With nothing
+   * under the cursor it edits the active tool's default instead, which is the
+   * only way to reach a parameter before the first shape exists.
+   */
+  const onWheel = useCallback(
+    (e: Konva.KonvaEventObject<WheelEvent>) => {
+      const p = pos();
+      const up = e.evt.deltaY < 0;
+      const step = up ? 1 : -1;
+      const target = hitShape(shapes, p);
+      // Keep the page from scrolling under the canvas.
+      e.evt.preventDefault();
+
+      if (target) {
+        switch (target.kind) {
+          case "text":
+            patchStyle({
+              textSizeIdx: clampIndex(sizeIndex(target.fontSize) + step, TEXT_SIZES.length),
+            });
+            setShapes((prev) =>
+              prev.map((s) =>
+                s.id === target.id && s.kind === "text"
+                  ? { ...s, fontSize: TEXT_SIZES[clampIndex(sizeIndex(s.fontSize) + step, TEXT_SIZES.length)] }
+                  : s,
+              ),
+            );
+            return;
+          case "mosaic":
+            setShapes((prev) =>
+              prev.map((s) => {
+                if (s.id !== target.id || s.kind !== "mosaic") return s;
+                const pixel = clamp(
+                  s.block / 5 + step,
+                  MOSAIC_PIXEL_MIN,
+                  MOSAIC_PIXEL_MAX,
+                );
+                return { ...s, block: mosaicBlockOf(pixel) };
+              }),
+            );
+            return;
+          case "highlight":
+            setShapes((prev) =>
+              prev.map((s) => {
+                if (s.id !== target.id || s.kind !== "highlight") return s;
+                return {
+                  ...s,
+                  opacity: clamp(s.opacity + step * WHEEL_OPACITY_STEP, 0, 1),
+                };
+              }),
+            );
+            return;
+          default: {
+            // Stroke width is shared by every stroked kind.
+            const current = "strokeWidth" in target ? target.strokeWidth : strokeWidthOf(style);
+            const next =
+              STROKE_WIDTHS[
+                clampIndex(
+                  STROKE_WIDTHS.findIndex((w) => w >= current) + step,
+                  STROKE_WIDTHS.length,
+                )
+              ];
+            setShapes((prev) =>
+              prev.map((s) => (s.id === target.id && "strokeWidth" in s ? { ...s, strokeWidth: next } : s)),
+            );
+            patchStyle({ strokeIdx: STROKE_WIDTHS.indexOf(next) });
+            return;
+          }
+        }
+      }
+
+      // Nothing under the pointer: edit the active tool's own default.
+      switch (tool) {
+        case "text":
+          patchStyle({ textSizeIdx: clampIndex(style.textSizeIdx + step, TEXT_SIZES.length) });
+          break;
+        case "mosaic":
+          patchStyle({
+            mosaicPixel: clamp(style.mosaicPixel + step, MOSAIC_PIXEL_MIN, MOSAIC_PIXEL_MAX),
+          });
+          break;
+        case "highlight":
+          patchStyle({
+            highlightOpacity: clamp(style.highlightOpacity + step * WHEEL_OPACITY_STEP, 0, 1),
+          });
+          break;
+        case "select":
+        case "picker":
+          break;
+        default:
+          patchStyle({ strokeIdx: clampIndex(style.strokeIdx + step, STROKE_WIDTHS.length) });
+          break;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pos, shapes, style, tool],
+  );
 
   /* ------------------------------------------------------------ shortcuts */
 
@@ -516,28 +702,69 @@ export function Overlay({ monitorId }: Props) {
   /* --------------------------------------------------------------- shapes */
 
   const makeShape = (id: ToolId, from: Point, to: Point): Shape | null => {
-    const base = { id: nextId(), color };
+    const base = { id: nextId(), color: style.color };
+    const strokeWidth = strokeWidthOf(style);
     switch (id) {
       case "rect":
-        return { ...base, kind: "rect", from, to, strokeWidth, filled, radius: 0 };
+        // Reference default is a 10px corner radius, toggled by "圆角".
+        return {
+          ...base,
+          kind: "rect",
+          from,
+          to,
+          strokeWidth,
+          filled: style.filled,
+          radius: style.rounded ? 10 : 0,
+        };
       case "ellipse":
-        return { ...base, kind: "ellipse", from, to, strokeWidth, filled };
+        return { ...base, kind: "ellipse", from, to, strokeWidth, filled: style.filled };
       case "arrow":
-        return { ...base, kind: "arrow", from, to, strokeWidth };
+        return {
+          ...base,
+          kind: "arrow",
+          from,
+          to,
+          strokeWidth,
+          head: style.arrowHead,
+          dash: style.arrowDash,
+        };
       case "pen":
         return { ...base, kind: "pen", points: [from], strokeWidth };
       case "mosaic":
-        return { ...base, kind: "mosaic", from, to, block: 12 };
+        return {
+          ...base,
+          kind: "mosaic",
+          from,
+          to,
+          // Freehand smears accumulate points; rectangle mode keeps the drag
+          // rectangle and leaves the path empty.
+          points: style.mosaicRect ? [] : [from],
+          rectSelect: style.mosaicRect,
+          block: mosaicBlockOf(style.mosaicPixel),
+          mode: style.mosaicMode,
+        };
       case "highlight":
-        return { ...base, kind: "highlight", from, to };
-      case "step":
+        return {
+          ...base,
+          kind: "highlight",
+          from,
+          to,
+          opacity: style.highlightOpacity,
+          blur: style.highlightBlur,
+          shape: style.highlightShape,
+        };
+      case "step": {
+        // Reference: the badge number is the current counter, clamped at 99;
+        // a 100th badge is silently dropped.
+        if (style.stepNext > 99) return null;
         return {
           ...base,
           kind: "step",
           at: from,
-          index: nextStepIndex(shapes),
-          radius: 12,
+          index: style.stepNext,
+          radius: stepDiameterOf(style) / 2,
         };
+      }
       default:
         return null;
     }
@@ -548,9 +775,13 @@ export function Overlay({ monitorId }: Props) {
       case "rect":
       case "ellipse":
       case "arrow":
-      case "mosaic":
       case "highlight":
         return { ...shape, to };
+      case "mosaic":
+        // Freehand mode paints along the pointer; rectangle mode drags a box.
+        return shape.rectSelect
+          ? { ...shape, to }
+          : { ...shape, to, points: [...shape.points, to] };
       case "pen":
         return { ...shape, points: [...shape.points, to] };
       default:
@@ -563,12 +794,17 @@ export function Overlay({ monitorId }: Props) {
       case "rect":
       case "ellipse":
       case "arrow":
-      case "mosaic":
       case "highlight": {
         const w = Math.abs(shape.to.x - shape.from.x);
         const h = Math.abs(shape.to.y - shape.from.y);
         return w >= 3 || h >= 3;
       }
+      case "mosaic":
+        // A freehand dab is a valid smear even without a drag distance.
+        return shape.rectSelect
+          ? Math.abs(shape.to.x - shape.from.x) >= 3 ||
+              Math.abs(shape.to.y - shape.from.y) >= 3
+          : shape.points.length > 1;
       case "pen":
         return shape.points.length > 1;
       default:
@@ -576,18 +812,53 @@ export function Overlay({ monitorId }: Props) {
     }
   };
 
-  /** Close the inline editor; a non-empty value becomes a text shape. */
+  /** Close the inline editor; a non-empty value becomes (or updates) a text shape. */
   const commitText = (cancelled = false) => {
     const edit = textEdit;
     if (!edit) return;
     setTextEdit(null);
     const value = edit.value.trim();
-    if (cancelled || !value) return;
+    if (cancelled) return;
+
+    if (edit.id) {
+      // Re-edit: drop the shape when the text was cleared, otherwise replace
+      // its content in place so its z-order and position survive.
+      setShapes((prev) =>
+        value
+          ? prev.map((s) => (s.id === edit.id && s.kind === "text" ? { ...s, text: value } : s))
+          : prev.filter((s) => s.id !== edit.id),
+      );
+      return;
+    }
+    if (!value) return;
     setShapes((prev) => [
       ...prev,
-      { id: nextId(), color, kind: "text", at: edit.at, text: value, fontSize: 18 },
+      {
+        id: nextId(),
+        color: style.color,
+        kind: "text",
+        at: edit.at,
+        text: value,
+        fontSize: textSizeOf(style),
+      },
     ]);
+    // The next badge follows the number just used (reference increments on
+    // creation), so a run of badges is 1, 2, 3… without the user re-entering it.
   };
+
+  // Focus lands in a rAF after mount: the mousedown default action (focusing
+  // the stage) runs after the synchronous render, so an immediate focus()
+  // loses and typing went to the canvas. Keyed on the editor's position so
+  // it re-runs for a new editor, never mid-typing (which would re-select).
+  useEffect(() => {
+    if (!textEdit) return;
+    const raf = requestAnimationFrame(() => {
+      textInputRef.current?.focus();
+      textInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textEdit?.at.x, textEdit?.at.y]);
 
   // Report any error that reaches the window, so a canvas SecurityError is
   // visible in the terminal instead of silently blanking the UI.
@@ -653,7 +924,9 @@ export function Overlay({ monitorId }: Props) {
       sampled: seen ? toHex(seen) : null,
     });
     if (!seen) return;
-    setColor(toHex(seen));
+    // Picking a colour also arms it as the drawing colour (the app's existing
+    // behaviour, kept deliberately — the reference only copies the value).
+    patchStyle({ color: toHex(seen) });
     copyPicked(seen);
   };
 
@@ -707,12 +980,9 @@ export function Overlay({ monitorId }: Props) {
       const result = await api.confirmCapture(monitor.id, box, action, overlay, savePath);
       if (result.message) setToast(result.message);
 
-      if (action === "pin") {
-        await api.pinCrop(result.cropId);
-        await getCurrentWindow().hide();
-      } else {
-        await getCurrentWindow().hide();
-      }
+      // Pin's window is opened Rust-side inside confirm_capture now; the old
+      // follow-up pinCrop invoke raced this overlay's destruction and lost.
+      await getCurrentWindow().hide();
       reset();
     } catch (e) {
       setToast(errorText(e));
@@ -734,14 +1004,13 @@ export function Overlay({ monitorId }: Props) {
     setBusy(true);
     try {
       const overlay = renderOverlay();
-      // "ask" crops for the chat window only: no clipboard write, no gallery
-      // auto-save, exactly like the reference's AI path.
-      const result = await api.confirmCapture(monitor.id, box, "ask", overlay);
-      // The chat window owns the streaming UI; hand it the crop and the action
-      // so it can start the request without another click.
-      await api.openChat(result.cropId, action);
-      await getCurrentWindow().hide();
-      reset();
+      // One invoke does everything: Rust crops (no clipboard write, no
+      // auto-save), opens the chat window bound to `action`, then tears this
+      // overlay down. There is deliberately no code after this call — this
+      // webview is destroyed inside the command, so a follow-up invoke (the
+      // old openChat/hide sequence) would never fire and the chat window
+      // never appeared.
+      await api.confirmCapture(monitor.id, box, "ask", overlay, null, action);
     } catch (e) {
       setToast(errorText(e));
     } finally {
@@ -793,6 +1062,7 @@ export function Overlay({ monitorId }: Props) {
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
         onDblClick={onDblClick}
+        onWheel={onWheel}
       >
         {/* Layer 0: annotations only. The frozen desktop is a DOM <img>
             underneath the stage, so `toDataURL` on this layer yields a
@@ -863,15 +1133,11 @@ export function Overlay({ monitorId }: Props) {
         <Toolbar
           box={box}
           tool={tool}
-          color={color}
-          strokeWidth={strokeWidth}
-          filled={filled}
+          style={style}
           canUndo={shapes.length > 0}
           busy={busy}
           onTool={setTool}
-          onColor={setColor}
-          onStrokeWidth={setStrokeWidth}
-          onFilled={setFilled}
+          onStyle={patchStyle}
           onUndo={() => setShapes((prev) => prev.slice(0, -1))}
           onAction={(a: ToolbarAction) => {
             if (a === "cancel") void cancel();
@@ -914,8 +1180,16 @@ export function Overlay({ monitorId }: Props) {
 
       {textEdit && (
         <textarea
+          ref={textInputRef}
           className="overlay-text-input"
-          style={{ left: textEdit.at.x, top: textEdit.at.y, color }}
+          style={{
+            left: textEdit.at.x,
+            top: textEdit.at.y,
+            // A re-edited shape keeps its own colour/size; a new one follows
+            // the current toolbar parameters.
+            color: textEdit.style?.color ?? style.color,
+            fontSize: textSizeOf(textEdit.style ?? style),
+          }}
           value={textEdit.value}
           autoFocus
           rows={1}
@@ -1053,6 +1327,135 @@ function reportDebug(stage: string, detail: unknown) {
 
 function setCursor(cursor: string) {
   document.body.style.cursor = cursor;
+}
+
+/** Shared 2D context for measuring text bounds on hit-testing. */
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+function textFontSize(shape: Extract<Shape, { kind: "text" }>): number {
+  return shape.fontSize;
+}
+
+/** Bounds of a committed shape, generous by a few px for grabbing. */
+function shapeBounds(shape: Shape): Box {
+  const pad = 4;
+  switch (shape.kind) {
+    case "rect":
+    case "ellipse":
+    case "highlight": {
+      const x = Math.min(shape.from.x, shape.to.x) - pad;
+      const y = Math.min(shape.from.y, shape.to.y) - pad;
+      return {
+        x,
+        y,
+        width: Math.abs(shape.to.x - shape.from.x) + pad * 2,
+        height: Math.abs(shape.to.y - shape.from.y) + pad * 2,
+      };
+    }
+    case "mosaic": {
+      // A freehand smear has no drag rectangle; measure the painted path.
+      if (!shape.rectSelect && shape.points.length > 0) {
+        const xs = shape.points.map((q) => q.x);
+        const ys = shape.points.map((q) => q.y);
+        const half = shape.block / 2 + pad;
+        return {
+          x: Math.min(...xs) - half,
+          y: Math.min(...ys) - half,
+          width: Math.max(...xs) - Math.min(...xs) + half * 2,
+          height: Math.max(...ys) - Math.min(...ys) + half * 2,
+        };
+      }
+      const x = Math.min(shape.from.x, shape.to.x) - pad;
+      const y = Math.min(shape.from.y, shape.to.y) - pad;
+      return {
+        x,
+        y,
+        width: Math.abs(shape.to.x - shape.from.x) + pad * 2,
+        height: Math.abs(shape.to.y - shape.from.y) + pad * 2,
+      };
+    }
+    case "arrow": {
+      const x = Math.min(shape.from.x, shape.to.x) - pad;
+      const y = Math.min(shape.from.y, shape.to.y) - pad;
+      return {
+        x,
+        y,
+        width: Math.abs(shape.to.x - shape.from.x) + pad * 2,
+        height: Math.abs(shape.to.y - shape.from.y) + pad * 2,
+      };
+    }
+    case "pen": {
+      const xs = shape.points.map((q) => q.x);
+      const ys = shape.points.map((q) => q.y);
+      const w = shape.strokeWidth;
+      return {
+        x: Math.min(...xs) - w - pad,
+        y: Math.min(...ys) - w - pad,
+        width: Math.max(...xs) - Math.min(...xs) + (w + pad) * 2,
+        height: Math.max(...ys) - Math.min(...ys) + (w + pad) * 2,
+      };
+    }
+    case "text": {
+      const size = textFontSize(shape);
+      measureCtx ??= document.createElement("canvas").getContext("2d");
+      let width = shape.text.length * size;
+      if (measureCtx) {
+        measureCtx.font = `600 ${size}px "Heiti SC", "PingFang SC", sans-serif`;
+        width = Math.max(
+          ...shape.text.split("\n").map((line) => measureCtx!.measureText(line).width),
+          0,
+        );
+      }
+      const lines = shape.text.split("\n").length;
+      return {
+        x: shape.at.x - pad,
+        y: shape.at.y - pad,
+        width: width + pad * 2,
+        height: lines * size * 1.35 + pad * 2,
+      };
+    }
+    case "step": {
+      const r = shape.radius + pad;
+      return { x: shape.at.x - r, y: shape.at.y - r, width: r * 2, height: r * 2 };
+    }
+  }
+}
+
+/** Topmost committed shape under the point, if any. */
+function hitShape(shapes: Shape[], p: Point): Shape | null {
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const b = shapeBounds(shapes[i]);
+    if (p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
+      return shapes[i];
+    }
+  }
+  return null;
+}
+
+/** Topmost text shape under the point; double-click edits it. */
+function textShapeAt(shapes: Shape[], p: Point): Extract<Shape, { kind: "text" }> | null {
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.kind !== "text") continue;
+    const b = shapeBounds(s);
+    if (p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
+      return s;
+    }
+  }
+  return null;
+}
+
+/** Preset index for an arbitrary font size (shapes keep exact px, not an index). */
+function sizeIndex(fontSize: number): number {
+  let best = 0;
+  for (let i = 0; i < TEXT_SIZES.length; i++) {
+    if (Math.abs(TEXT_SIZES[i] - fontSize) < Math.abs(TEXT_SIZES[best] - fontSize)) best = i;
+  }
+  return best;
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
 }
 
 /** Resize an existing box by dragging one handle. */

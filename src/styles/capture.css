@@ -341,33 +341,102 @@ textarea {
   flex: 0 0 auto;
 }
 
-.cap-swatches {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.cap-color {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.55);
-}
-
-.cap-palette {
+/* Parameter bubble: the reference's second 44px bar (`.screenshots-option-container`).
+   It is anchored to the toolbar itself and flips above it near the bottom edge,
+   so it never covers the selection handles it belongs to. */
+.cap-bubble {
   position: absolute;
-  top: 34px;
-  left: -8px;
+  left: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  width: 148px;
-  padding: 12px;
-  background: #2c2c2c;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
+  color: var(--bar-fg);
+  background: var(--bar-bg);
+  border: 1px solid var(--bar-border);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
-  z-index: 12;
+  box-sizing: border-box;
+  white-space: nowrap;
+  z-index: 11;
+}
+
+/* Three stroke presets drawn as dots, matching the reference `Ql` glyphs. */
+.cap-dots {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 16px;
+}
+
+.cap-stroke {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.cap-stroke > span {
+  display: block;
+  border-radius: 50%;
+  background: var(--bar-fg);
+}
+
+.cap-stroke:hover {
+  background: var(--bar-hover);
+}
+
+.cap-stroke.active {
+  background: var(--bar-active);
+}
+
+.cap-stroke.active > span {
+  background: var(--bar-accent);
+}
+
+/* Reference: in rectangle-selection mode the dots stay unlit. */
+.cap-dots[data-dim="1"] .cap-stroke > span {
+  opacity: 0.45;
+}
+
+.cap-size-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--bar-fg);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.cap-size-btn:hover {
+  background: var(--bar-hover);
+}
+
+.cap-size-btn.active {
+  background: var(--bar-active);
+  color: var(--bar-accent);
+}
+
+/* 7 fixed reference colours. `#FFFFFF` carries a hairline so it reads on the
+   dark bar; the active swatch is ringed rather than filled (reference
+   `.screenshots-color-active`). */
+.cap-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .cap-dot {
@@ -385,32 +454,142 @@ textarea {
 
 .cap-dot.active {
   border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.cap-width {
-  width: 52px;
-  accent-color: var(--bar-accent);
-  padding: 0;
+/* Checkbox-style toggles (圆角 / 实心), matching the reference `TS` panel. */
+.cap-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--bar-fg);
   background: transparent;
   border: none;
-  cursor: pointer;
-  flex: 0 0 auto;
+  border-radius: 6px;
 }
 
-.cap-width::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.22);
+.cap-check:hover {
+  background: var(--bar-hover);
 }
 
-.cap-width::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  margin-top: -4.5px;
-  border-radius: 50%;
+.cap-check-box {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 3px;
+  color: #fff;
+}
+
+.cap-check.active .cap-check-box {
+  background: var(--bar-accent);
+  border-color: var(--bar-accent);
+}
+
+/* Segmented control for small exclusive choices (mosaic mode, highlight shape). */
+.cap-seg {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+}
+
+.cap-seg-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--bar-fg);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+}
+
+.cap-seg-btn:hover {
+  background: var(--bar-hover);
+}
+
+.cap-seg-btn.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--bar-accent);
+}
+
+/* Native selects, restyled to the bar's palette (arrow / dash style). */
+.cap-select {
+  height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--bar-fg);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  outline: none;
+}
+
+.cap-select:focus-visible {
+  border-color: var(--bar-accent);
+}
+
+.cap-select option {
+  color: #24262b;
   background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+/* Labeled slider with a live value (pixel / opacity / blur). */
+.cap-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.cap-slider-label {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.cap-slider input[type="range"] {
+  width: 76px;
+  margin: 0;
+  accent-color: var(--bar-accent);
+  background: transparent;
+  cursor: pointer;
+}
+
+.cap-slider-value {
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+  color: var(--bar-fg);
+}
+
+/* Step-number field. */
+.cap-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.cap-num input {
+  width: 46px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--bar-fg);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  outline: none;
+}
+
+.cap-num input:focus-visible {
+  border-color: var(--bar-accent);
 }
 
 .cap-icon:disabled {
@@ -419,25 +598,28 @@ textarea {
   cursor: not-allowed;
 }
 
-/* Inline editor for the text tool: opens where the shape will land, styled
-   to match the committed Konva text (same family/weight/size, shape colour). */
+/* Inline editor for the text tool: canvas-native and WYSIWYG — transparent,
+   borderless text in the committed font/colour/size, so what you type is what
+   lands on the screenshot. A faint dashed frame only hints at edit mode.
+   Heiti SC first, mirroring the reference tool's macOS text font. */
 .overlay-text-input {
   position: fixed;
   z-index: 14;
-  min-width: 180px;
+  min-width: 60px;
   max-width: 480px;
-  padding: 2px 4px;
-  font-family: -apple-system, "PingFang SC", sans-serif;
-  font-size: 18px;
+  padding: 0;
+  font-family: "Heiti SC", "PingFang SC", -apple-system, sans-serif;
   font-weight: 600;
   line-height: 1.35;
-  background: rgba(22, 24, 29, 0.55);
-  border: 1px dashed rgba(255, 255, 255, 0.65);
-  border-radius: 4px;
+  color: inherit;
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  border-radius: 2px;
   outline: none;
   resize: none;
   overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  caret-color: currentColor;
 }
 
 .overlay-text-input::placeholder {

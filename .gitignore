@@ -7,3 +7,5 @@ src-tauri/gen/
 report/
 *.dmg
 .DS_Store
+
+.zcode

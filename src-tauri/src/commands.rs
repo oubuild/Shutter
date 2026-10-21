@@ -185,6 +185,11 @@ pub fn cancel_capture(app: AppHandle) -> std::result::Result<(), String> {
 /// `overlay_data_url` is the annotation layer rendered by the webview; it is
 /// merged over the crop before anything is written. `save_path` is the exact
 /// file the user picked in the native save dialog (Save action only).
+/// `ai_action` names the AI preset to run when the action is `ask`.
+///
+/// Every action's side effects must complete inside this command: the overlay
+/// webview that issued the invoke is destroyed at the end, so any follow-up
+/// invoke from it would never fire.
 #[tauri::command]
 pub async fn confirm_capture(
     app: AppHandle,
@@ -193,12 +198,14 @@ pub async fn confirm_capture(
     action: CaptureAction,
     overlay_data_url: Option<String>,
     save_path: Option<String>,
+    ai_action: Option<String>,
 ) -> std::result::Result<CaptureResult, String> {
-    do_confirm(app, monitor_id, rect, action, overlay_data_url, save_path)
+    do_confirm(app, monitor_id, rect, action, overlay_data_url, save_path, ai_action)
         .await
         .map_err(|e| format!("{e:#}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn do_confirm(
     app: AppHandle,
     monitor_id: u32,
@@ -206,6 +213,7 @@ async fn do_confirm(
     action: CaptureAction,
     overlay_data_url: Option<String>,
     save_path: Option<String>,
+    ai_action: Option<String>,
 ) -> Result<CaptureResult> {
     let store: State<'_, Arc<crate::session::Store>> = app.state();
     let session = store
@@ -279,6 +287,20 @@ async fn do_confirm(
     }
 
     let crop_id = store.put_crop(png);
+
+    // Window-opening side effects happen before the teardown: once the
+    // overlays are destroyed, the webview waiting on this invoke is gone and
+    // could never issue another command (the AI/pin windows used to never
+    // appear for exactly that reason).
+    match action {
+        CaptureAction::Ask => {
+            windows::open_chat(&app, Some(&crop_id), ai_action.as_deref())?;
+        }
+        CaptureAction::Pin => {
+            open_pin_for_crop(&app, &crop_id)?;
+        }
+        _ => {}
+    }
     overlay::destroy_all(&app);
 
     Ok(CaptureResult {
@@ -641,11 +663,12 @@ pub fn crop_data_url(crop_id: String, app: AppHandle) -> std::result::Result<Str
     Ok(output::data_url(&png))
 }
 
-/// Open a pin window for an already-captured crop.
-#[tauri::command]
-pub fn pin_crop(crop_id: String, app: AppHandle) -> std::result::Result<(), String> {
+/// Open a pin window for an already-captured crop. Shared by the `pin_crop`
+/// command and the Pin confirm action (which must open it before the overlay
+/// teardown, while the webview is still alive to ask for it).
+fn open_pin_for_crop(app: &AppHandle, crop_id: &str) -> Result<()> {
     let store: State<'_, Arc<crate::session::Store>> = app.state();
-    let info = store.crop_info(&crop_id).map_err(|e| format!("{e:#}"))?;
+    let info = store.crop_info(crop_id)?;
 
     // Match the window to the image, capped so a full-screen crop does not
     // create a window larger than the desktop.
@@ -670,8 +693,14 @@ pub fn pin_crop(crop_id: String, app: AppHandle) -> std::result::Result<(), Stri
         width: info.width as f64 * scale,
         height: info.height as f64 * scale,
     };
-    pin::ensure(&app, &crop_id, rect).map_err(|e| format!("{e:#}"))?;
+    pin::ensure(app, crop_id, rect)?;
     Ok(())
+}
+
+/// Open a pin window for an already-captured crop.
+#[tauri::command]
+pub fn pin_crop(app: AppHandle, crop_id: String) -> std::result::Result<(), String> {
+    open_pin_for_crop(&app, &crop_id).map_err(|e| format!("{e:#}"))
 }
 
 /// Which monitor the pointer is on, so a toolbar click can target it.

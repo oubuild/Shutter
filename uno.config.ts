@@ -18,8 +18,9 @@ import { defineConfig, presetWind3 } from "unocss";
 export default defineConfig({
   presets: [
     presetAnthonyDesign({
-      // Apple system blue, matching the rest of the app chrome.
-      primary: "#007aff",
+      // Brand blue per the Shutter AI visual spec (#2563EB); the preset
+      // generates the primary-500/600/… scale from it.
+      primary: "#2563eb",
       // The shipped action button uses a 13%-alpha border, which reads as plain
       // text on the white cards this app is built from. One step stronger keeps
       // the antfu vocabulary but restores the button affordance.
@@ -72,6 +73,13 @@ input, textarea, select { font: inherit; color: inherit; }
       sans: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif',
       mono: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace',
     },
+    // Shutter AI visual spec. Plain hex tokens (not the OKLCH antfu scales)
+    // so a future dark theme only has to swap these values.
+    colors: {
+      surface: { DEFAULT: "#FFFFFF", alt: "#F5F6F8" },
+      ink: { DEFAULT: "#24262B", dim: "#858A94" },
+      line: { DEFAULT: "#E5E7EB", strong: "#D8DBE0" },
+    },
   },
   shortcuts: {
     // Semantic layers the antfu overlay primitives reference.
@@ -96,6 +104,20 @@ input, textarea, select { font: inherit; color: inherit; }
     "app-meta": "font-mono tabular-nums text-mini color-faint truncate",
     "app-kbd":
       "inline-flex items-center justify-center min-w-14 px-1.5 py-0.5 rounded border border-neutral-300 bg-sunken font-mono text-mini color-muted leading-none",
+
+    // Shutter AI window (Chat.tsx): 36px controls, 8px control radius,
+    // 12px card radius, spec palette from theme.colors above.
+    "ai-btn":
+      "inline-flex h-9 flex-none items-center gap-1.5 rounded-lg border border-line bg-surface px-3.5 text-[13px] font-500 color-ink transition hover:bg-surface-alt hover:border-line-strong disabled:pointer-events-none disabled:op-40 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
+    "ai-btn-primary":
+      "inline-flex h-9 flex-none items-center gap-1.5 rounded-lg border border-transparent bg-primary-500 px-4 text-[13px] font-500 text-white transition hover:bg-primary-600 disabled:pointer-events-none disabled:op-45 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
+    "ai-iconbtn":
+      "inline-flex h-8 w-8 flex-none items-center justify-center rounded-lg color-ink-dim transition hover:bg-surface-alt hover:color-ink disabled:pointer-events-none disabled:op-40 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
+    "ai-card": "bg-surface border border-line rounded-xl overflow-hidden flex flex-col",
+    "ai-card-head": "flex h-11 flex-none items-center gap-2 border-b border-line px-3.5",
+    "ai-card-title": "text-[13px] font-600 color-ink",
+    "ai-headbtn":
+      "inline-flex h-7 flex-none items-center gap-1 rounded-md px-2 text-compact font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink disabled:pointer-events-none disabled:op-40 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
   },
   content: {
     pipeline: {
