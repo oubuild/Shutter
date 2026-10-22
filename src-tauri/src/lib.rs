@@ -8,6 +8,7 @@ pub mod gallery;
 pub mod output;
 pub mod overlay;
 pub mod pin;
+pub mod scroll;
 pub mod session;
 pub mod settings;
 pub mod types;
@@ -209,6 +210,11 @@ pub fn run() {
             commands::save_crop,
             commands::crop_data_url,
             commands::pin_crop,
+            commands::scroll_start,
+            commands::scroll_pause,
+            commands::scroll_resume,
+            commands::scroll_stop,
+            commands::scroll_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Shutter")
@@ -216,6 +222,10 @@ pub fn run() {
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 // Closing the last window must not quit a menu-bar app.
                 if code.is_none() {
+                    // A scroll session owns threads and windows; stop it
+                    // before deciding, so ExitRequested from its teardown
+                    // cannot recurse.
+                    crate::scroll::cancel(_app);
                     api.prevent_exit();
                 }
             }

@@ -714,3 +714,61 @@ pub fn action_hint(action: AiAction) -> &'static str {
         AiAction::Reply => "高情商回复",
     }
 }
+
+/* --------------------------------------------------- long screenshot (scroll) */
+
+/// Begin a scroll-and-stitch session on the current selection.
+///
+/// The overlay webview calls this AFTER hiding its own chrome; the first
+/// frame is taken from the frozen session frame (not the live screen) so the
+/// selection content matches exactly what the user framed.
+#[tauri::command]
+pub async fn scroll_start(
+    app: AppHandle,
+    monitor_id: u32,
+    rect: Rect,
+) -> std::result::Result<crate::scroll::types::ScrollStatus, String> {
+    // The heavy first capture runs on the caller's thread inside scroll::begin;
+    // keep the IPC responsive by moving off the async runtime's worker.
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::scroll::begin(&app, monitor_id, rect).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("scroll start failed: {e}"))?
+}
+
+/// Pause the auto-scroller (control bar toggle).
+#[tauri::command]
+pub fn scroll_pause() -> crate::scroll::types::ScrollStatus {
+    crate::scroll::pause()
+}
+
+/// Resume the auto-scroller.
+#[tauri::command]
+pub fn scroll_resume() -> crate::scroll::types::ScrollStatus {
+    crate::scroll::resume()
+}
+
+/// Stop the session and dispose of the stitched image (save/copy/cancel).
+///
+/// Blocking on purpose: the worker joins within one loop iteration and the
+/// PNG encode must finish before the control bar closes itself.
+#[tauri::command]
+pub async fn scroll_stop(
+    app: AppHandle,
+    action: crate::scroll::types::ScrollFinishAction,
+) -> std::result::Result<Option<crate::scroll::types::ScrollDone>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::scroll::stop(&app, action)
+            .map(Some)
+            .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("scroll stop failed: {e}"))?
+}
+
+/// Current session snapshot, for a control bar that mounted mid-session.
+#[tauri::command]
+pub fn scroll_status() -> crate::scroll::types::ScrollStatus {
+    crate::scroll::status()
+}

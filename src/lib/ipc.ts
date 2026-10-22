@@ -95,6 +95,56 @@ export type GalleryItem = {
   createdAt: number;
 };
 
+/* -------------------------------------------------------- long screenshot */
+
+/** Which phase a scroll-capture session is in. */
+export type ScrollPhase = "idle" | "recording" | "paused" | "finished" | "failed";
+
+/** Live state of the scroll-capture session, pushed via `scroll://state`. */
+export type ScrollStatus = {
+  sessionId: string | null;
+  phase: ScrollPhase;
+  /** Total height of the stitched image, in physical px. */
+  height: number;
+  /** Selection width/height in physical px. */
+  width: number;
+  /** Whether the auto-scroller is injecting wheel events (vs manual mode). */
+  autoScroll: boolean;
+  /** Why the auto-scroller stopped, in user-facing Chinese. */
+  note: string | null;
+};
+
+/** Result of finishing a scroll capture, via `scroll://done`. */
+export type ScrollDone = {
+  sessionId: string;
+  ok: boolean;
+  /** Stitched dimensions in physical px. */
+  width: number;
+  height: number;
+  message: string | null;
+  savedPath: string | null;
+};
+
+/** Preview update payload, via `scroll://preview`. */
+export type ScrollPreview = {
+  sessionId: string;
+  /** Atomic-replaced PNG of the stitched image so far. */
+  path: string;
+  width: number;
+  height: number;
+};
+
+/** Transient hint shown over the selection, via `scroll://tip`. */
+export type ScrollTip = {
+  sessionId: string;
+  /** Kind selects styling/urgency, matching the reference's state machine. */
+  kind: "info" | "warn" | "error" | "bottom";
+  text: string;
+};
+
+/** How `scroll_stop` should dispose of the stitched image. */
+export type ScrollFinishAction = "save" | "copy" | "cancel";
+
 export const api = {
   captureScreens: () => invoke<CaptureSession>("capture_screens"),
   currentSession: () => invoke<CaptureSession | null>("current_session"),
@@ -165,6 +215,14 @@ export const api = {
   cropDataUrl: (cropId: string) => invoke<string>("crop_data_url", { cropId }),
   pinCrop: (cropId: string) => invoke<void>("pin_crop", { cropId }),
   closePin: (pinId: string) => invoke<void>("close_pin", { pinId }),
+  /* Long screenshot (scroll stitching). */
+  scrollStart: (monitorId: number, rect: Rect) =>
+    invoke<ScrollStatus>("scroll_start", { monitorId, rect }),
+  scrollPause: () => invoke<ScrollStatus>("scroll_pause"),
+  scrollResume: () => invoke<ScrollStatus>("scroll_resume"),
+  scrollStop: (action: ScrollFinishAction) =>
+    invoke<ScrollDone | null>("scroll_stop", { action }),
+  scrollStatus: () => invoke<ScrollStatus>("scroll_status"),
 };
 
 export const events = {
@@ -181,6 +239,15 @@ export const events = {
   /** Fired when the tray wants a specific control focused (e.g. shortcuts). */
   onUiFocus: (cb: (target: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://focus", (e) => cb(e.payload)),
+  /* Long screenshot events. */
+  onScrollState: (cb: (s: ScrollStatus) => void): Promise<UnlistenFn> =>
+    listen<ScrollStatus>("scroll://state", (e) => cb(e.payload)),
+  onScrollPreview: (cb: (p: ScrollPreview) => void): Promise<UnlistenFn> =>
+    listen<ScrollPreview>("scroll://preview", (e) => cb(e.payload)),
+  onScrollTip: (cb: (t: ScrollTip) => void): Promise<UnlistenFn> =>
+    listen<ScrollTip>("scroll://tip", (e) => cb(e.payload)),
+  onScrollDone: (cb: (d: ScrollDone) => void): Promise<UnlistenFn> =>
+    listen<ScrollDone>("scroll://done", (e) => cb(e.payload)),
 };
 
 /** Errors from Rust arrive as strings; normalise them for display. */
