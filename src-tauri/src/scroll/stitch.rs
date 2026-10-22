@@ -28,13 +28,10 @@ pub struct Stitcher {
     last_frame: RgbaImage,
     /// Offsets actually committed (for seam bias + direction checks).
     history: Vec<i64>,
-    /// Per-frame row-hash signature of the top band, for sticky detection:
-    /// (frame_index, top_band_hash).
-    top_band_hashes: Vec<(u32, u64)>,
+    /// Consecutive frames' leading-equal-row depths, for sticky detection.
+    candidate_depths: Vec<u32>,
     /// Rows at the top confirmed to be a fixed (sticky) region.
     sticky_top: u32,
-    /// Rows at the bottom of each frame confirmed fixed.
-    sticky_bottom: u32,
     /// Diagnostics counter.
     appended: u32,
 }
@@ -55,22 +52,12 @@ fn row_hash(img: &RgbaImage, y: u32) -> u64 {
 impl Stitcher {
     /// First frame becomes the base of the accumulated image.
     pub fn new(first: RgbaImage) -> Self {
-        let (w, h) = first.dimensions();
-        let mut top_band_hashes = Vec::new();
-        let band = h.min(STICKY_MAX_BAND);
-        let mut acc: u64 = 1469598103934665603;
-        for y in 0..band {
-            acc ^= row_hash(&first, y);
-            acc = acc.wrapping_mul(1099511628211);
-        }
-        top_band_hashes.push((0, acc));
         Self {
             image: first.clone(),
             last_frame: first,
             history: Vec::new(),
-            top_band_hashes,
+            candidate_depths: Vec::new(),
             sticky_top: 0,
-            sticky_bottom: 0,
             appended: 1,
         }
     }
@@ -96,41 +83,29 @@ impl Stitcher {
         imageops::crop_imm(img, 0, y0, img.width(), y1 - y0).to_image()
     }
 
-    /// Detect a fixed top band: the same top-of-frame signature across
-    /// `STICKY_MIN_FRAMES` consecutive frames (reference `detect_fixed_margins`).
+    /// Detect a fixed top band: rows that are identical at the SAME
+    /// frame-local y across `STICKY_MIN_FRAMES` consecutive frames
+    /// (reference `detect_fixed_margins` / `MAC_FIXED_TILE_STREAKS`). A
+    /// scrolling page never repeats a row at the same y; a fixed header does.
     fn update_sticky_top(&mut self, frame: &RgbaImage) {
-        let band = frame.height().min(STICKY_MAX_BAND);
-        let mut acc: u64 = 1469598103934665603;
-        for y in 0..band {
-            acc ^= row_hash(frame, y);
-            acc = acc.wrapping_mul(1099511628211);
+        // Depth of the leading run of rows equal to the previous frame's rows
+        // at the same y.
+        let limit = frame.height().min(STICKY_MAX_BAND);
+        let mut depth = 0u32;
+        while depth < limit && row_hash(frame, depth) == row_hash(&self.last_frame, depth) {
+            depth += 1;
         }
-        self.top_band_hashes.push((self.appended, acc));
-        // Keep only the recent window.
-        let keep = self.top_band_hashes.len().saturating_sub(8);
-        self.top_band_hashes.drain(0..keep);
-
-        let recent: Vec<u64> = self
-            .top_band_hashes
-            .iter()
-            .map(|(_, h)| *h)
-            .collect();
-        if recent.len() >= STICKY_MIN_FRAMES as usize
-            && recent[recent.len() - STICKY_MIN_FRAMES as usize..]
-                .iter()
-                .all(|h| *h == *recent.last().unwrap())
-        {
-            // Confirm how deep the identical region goes by comparing the
-            // current frame against the stitched image's top.
-            let mut depth = 0u32;
-            let limit = band.min(self.image.height());
-            while depth < limit
-                && row_hash(frame, depth) == row_hash(&self.image, depth)
-            {
-                depth += 1;
-            }
-            if depth >= 24 {
-                self.sticky_top = self.sticky_top.max(depth);
+        // Track the streak: a candidate becomes confirmed once it repeats for
+        // STICKY_MIN_FRAMES frames (2 in the pair + current).
+        if depth >= 24 {
+            self.candidate_depths.push(depth);
+        } else {
+            self.candidate_depths.clear();
+        }
+        if self.candidate_depths.len() >= STICKY_MIN_FRAMES as usize {
+            let confirmed = *self.candidate_depths.iter().min().unwrap();
+            if confirmed > self.sticky_top {
+                self.sticky_top = confirmed;
                 log::info!("[长截图] 固定栏 header={}px", self.sticky_top);
             }
         }
@@ -177,8 +152,11 @@ impl Stitcher {
         }
     }
 
-    /// Append a frame at the estimated offset, choosing the visually cheapest
-    /// seam within ±`SEAM_SEARCH` px. Returns the rows actually added.
+    /// Append a frame at the estimated offset. Returns the rows actually added.
+    ///
+    /// Geometry (same as the pipeline's): the frame's top `fh − offset` rows
+    /// duplicate content already accumulated; only its bottom `offset` rows
+    /// are new. The seam sits at the accumulated image's current height.
     pub fn append(&mut self, frame: RgbaImage, decision: &FrameDecision, offset: i64) -> u32 {
         let FrameDecision::Append { .. } = decision else {
             return 0;
@@ -186,23 +164,15 @@ impl Stitcher {
         self.update_sticky_top(&frame);
 
         let fh = frame.height() as i64;
-        let ah = self.image.height() as i64;
+        // Rows of the frame that re-show existing content.
+        let overlap = (fh - offset).max(0);
 
-        // Overlap between the new frame's start and the accumulated tail.
-        // offset > 0: the page scrolled down; the first `overlap` rows of the
-        // frame re-show the accumulated tail.
-        let overlap = (ah).min(offset).max(0);
-        let frame_y_start = (fh - ah).max(0); // unused guard for tiny frames
-        let _ = frame_y_start;
-
-        // Rows of the frame that are entirely new.
-        let new_rows = (fh - overlap).max(0) as u32;
-
-        // Seam search: adjust the split point by the cheapest alignment.
+        // Seam search: adjust the split point by the cheapest alignment
+        // within ±SEAM_SEARCH px (reference `seam::overlap_seam_cost`).
         let take = overlap as u32;
-        let mut best_shift = 0i32;
         if take > 0 {
             let mut best_cost = f64::MAX;
+            let mut best_shift = 0i32;
             for shift in -SEAM_SEARCH..=SEAM_SEARCH {
                 let cost = Self::seam_cost(&self.image, &frame, 0, take, shift);
                 if cost < best_cost {
@@ -210,11 +180,11 @@ impl Stitcher {
                     best_shift = shift;
                 }
             }
+            let _ = best_shift; // the split already sits at the verified offset;
+                                // the search only guards against rounding.
         }
-        let _ = best_shift; // the split already sits at the verified offset;
-                            // the search only guards against rounding.
 
-        // Copy the new rows below the accumulated image.
+        // Copy the genuinely new rows below the accumulated image.
         let y_from = overlap.max(0) as u32;
         let add = (fh as u32).saturating_sub(y_from);
         if add == 0 {
@@ -224,7 +194,7 @@ impl Stitcher {
         let new_part = Self::rows(&frame, y_from, fh as u32);
         let mut grown = RgbaImage::new(self.image.width(), self.image.height() + add);
         imageops::overlay(&mut grown, &self.image, 0, 0);
-        imageops::overlay(&mut grown, &new_part, 0, self.image.height());
+        imageops::overlay(&mut grown, &new_part, 0, self.image.height() as i64);
         self.image = grown;
         self.history.push(offset);
         self.appended += 1;
@@ -272,7 +242,13 @@ mod tests {
         };
         let mut img = RgbaImage::new(w, h);
         for y in 0..h {
-            let band = ((y / 7) % 256) as u8;
+            // Same generator as the pipeline tests: seed-spaced, seed-phased
+            // bands so a wrong alignment can never look like a match.
+            let k = (y / 7) % 256;
+            let band = (k
+                .wrapping_mul(23 + (seed % 13) as u32)
+                .wrapping_add((seed % 256) as u32 * 37)
+                % 256) as u8;
             for x in 0..w {
                 let n = if x % 5 == 0 { next() / 8 } else { 0 };
                 let v = band.wrapping_add(n);
@@ -290,14 +266,7 @@ mod tests {
     fn stitches_three_windows() {
         let src = page(31, 200, 1400);
         let mut stitcher = Stitcher::new(window_of(&src, 0, 300));
-        let offsets = [120i64, 90, 150];
         let mut total = 300u32;
-        for (i, &off) in offsets.iter().enumerate() {
-            let frame = window_of(&src, 120 + i * 0 + (0..i).map(|j| offsets[j]).sum::<i64>() as u32 + off as u32 - offsets[0] as u32, 300);
-            let _ = frame;
-        }
-        // Simpler: walk explicit windows.
-        let mut stitcher = Stitcher::new(window_of(&src, 0, 300));
         let mut y = 0u32;
         for &off in &[120i64, 90, 150] {
             y += off as u32;
@@ -326,7 +295,7 @@ mod tests {
         let src = page(41, 200, 1600);
         // Fixed 40px header prepended to every "frame".
         let header = window_of(&src, 0, 40);
-        let mut compose = |y: u32| {
+        let compose = |y: u32| {
             let body = window_of(&src, 40 + y, 300);
             let mut img = RgbaImage::new(200, 340);
             imageops::overlay(&mut img, &header, 0, 0);

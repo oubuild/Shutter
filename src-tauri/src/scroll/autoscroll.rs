@@ -23,12 +23,13 @@ pub mod imp {
     use super::InjectCapability;
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
     use core_graphics::event::{
-        CGEventField, CGEventSource, CGEventSourceStateID, CGEventTap, CGEventTapLocation,
-        CGEventTapOptions, CGEventTapPlacement, CGEventType, CGScrollEventUnit, ScrollEventUnit,
+        CallbackResult, CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventType, EventField, ScrollEventUnit,
     };
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::sync::Arc;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// A posted event carries the "event source state id" of its source; our
     /// injected events use HIDSystemState just like real hardware, so the
@@ -42,7 +43,10 @@ pub mod imp {
             .unwrap_or(0)
     }
 
-    #[link(name = "ApplicationServices", kind = "dylib")]
+    // `kind = "framework"`: the plain dylib lookup fails because
+    // ApplicationServices re-exports the symbol from HIServices; the framework
+    // import path resolves it (verified with a C probe against the SDK).
+    #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
@@ -113,9 +117,9 @@ pub mod imp {
             let shared = Arc::new(ListenerShared::default());
 
             // CGEventTap::new_unchecked is unsafe for a reason: the callback
-            // must live as long as the tap. Box::leak the Arc to 'static and
-            // keep the JoinHandle so Drop can stop the loop before return.
-            let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared));
+            // must live as long as the tap. Leak one Arc for 'static and keep
+            // another in this handle so Drop can flip the stop flag.
+            let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared).into());
             let thread = std::thread::Builder::new()
                 .name("scroll-listener".into())
                 .spawn(move || {
@@ -125,21 +129,21 @@ pub mod imp {
                             CGEventTapPlacement::HeadInsertEventTap,
                             CGEventTapOptions::ListenOnly,
                             vec![CGEventType::ScrollWheel],
-                            |_proxy, _etype, event| {
+                            |_proxy, _etype, event: &CGEvent| {
                                 // Our own injections arrive within a few ms of
                                 // the post; treat those as noise.
                                 if just_injected(8) {
-                                    return core_graphics::event::CallbackResult::Keep;
+                                    return CallbackResult::Keep;
                                 }
                                 let dy = event.get_integer_value_field(
-                                    CGEventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1,
+                                    EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1,
                                 );
                                 leaked.user_lines.fetch_add(dy, Ordering::SeqCst);
-                                core_graphics::event::CallbackResult::Keep
+                                CallbackResult::Keep
                             },
                         )
                     };
-                    let Some(tap) = tap else {
+                    let Ok(tap) = tap else {
                         log::warn!("[长截图] 滚动监听器初始化失败");
                         return;
                     };
@@ -155,7 +159,11 @@ pub mod imp {
                     // checked promptly (CFRunLoop::run_current never returns).
                     loop {
                         unsafe {
-                            CFRunLoop::run_in_mode(kCFRunLoopCommonModes, 0.2, false)
+                            CFRunLoop::run_in_mode(
+                                kCFRunLoopCommonModes,
+                                std::time::Duration::from_millis(200),
+                                false,
+                            )
                         };
                         if leaked.stop.load(Ordering::SeqCst) {
                             break;

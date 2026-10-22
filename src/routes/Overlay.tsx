@@ -28,10 +28,12 @@ import {
 } from "../canvas/model";
 import {
   api,
+  events,
   errorText,
   type AiAction,
   type CaptureAction,
   type MonitorInfo,
+  type ScrollPreview,
 } from "../lib/ipc";
 import {
   MIN_SELECTION,
@@ -76,6 +78,29 @@ export function Overlay({ monitorId }: Props) {
   const [menu, setMenu] = useState<Point | null>(null);
   /** Inline text editor: open at the click point while the text tool is used. */
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
+
+  /* ------------------------------------------------------- scroll capture */
+  /** Long-screenshot session state; null = normal capture mode. */
+  const [scrollMode, setScrollMode] = useState<{
+    sessionId: string;
+    /** The selection the capture started from, for preview anchoring. */
+    anchor: Box;
+    phase: "idle" | "recording" | "paused" | "finished" | "failed";
+  } | null>(null);
+  /** Live preview thumbnail (decoded url + computed placement). */
+  const [scrollPreview, setScrollPreview] = useState<{
+    url: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  /** Transient tip from Rust (reference state-machine texts). */
+  const [scrollTip, setScrollTip] = useState<{ kind: string; text: string } | null>(null);
+  /** Decoded images cached by base URL so repeated events don't flicker. */
+  const previewCache = useRef(new Map<string, HTMLImageElement>());
+  /** The live session id, readable from async callbacks (decode races). */
+  const scrollModeRef = useRef<string | null>(null);
 
   /** Patch drawing parameters; a fresh object each time so React re-renders. */
   const patchStyle = useCallback((patch: Partial<ToolStyle>) => {
@@ -610,6 +635,16 @@ export function Overlay({ monitorId }: Props) {
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
         return;
       }
+      // Scroll-capture mode owns the keyboard: only Escape (cancel the
+      // scroll session) gets through; the capture shortcuts are suppressed
+      // so they cannot tear the session down mid-stitch.
+      if (scrollMode) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          void stopScroll("cancel");
+        }
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         // Leave the eyedropper first; a second Esc cancels the capture.
@@ -688,6 +723,13 @@ export function Overlay({ monitorId }: Props) {
           void confirm("pin");
           return;
         }
+        // C starts the long screenshot, mirroring the reference bar's
+        // 长截图(C) affordance.
+        if (k === "c") {
+          e.preventDefault();
+          void startScroll();
+          return;
+        }
       }
       const mapped = TOOL_KEYS[e.key];
       if (mapped && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -697,7 +739,7 @@ export function Overlay({ monitorId }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [box, busy, monitor, picker, pickerFmt, shapes, tool]);
+  }, [box, busy, monitor, picker, pickerFmt, scrollMode, shapes, tool]);
 
   /* --------------------------------------------------------------- shapes */
 
@@ -1030,6 +1072,203 @@ export function Overlay({ monitorId }: Props) {
     }
   };
 
+  /* ------------------------------------------------------- scroll capture */
+
+  /** Leave scroll mode and return to a fresh capture surface. */
+  const exitScrollMode = useCallback(() => {
+    scrollModeRef.current = null;
+    setScrollMode(null);
+    setScrollPreview(null);
+    setScrollTip(null);
+    previewCache.current.clear();
+    reset();
+  }, []);
+
+  /** Begin the long screenshot on the current selection (toolbar C). */
+  const startScroll = useCallback(async () => {
+    if (!box || !monitor || busy || scrollMode) return;
+    if (!isUsableSelection(box)) {
+      setToast("请先拖出一个选区");
+      return;
+    }
+    const anchor = box;
+    setBusy(true);
+    try {
+      // The overlay hides its chrome first (render below reads scrollMode),
+      // then Rust captures the live region behind it.
+      const status = await api.scrollStart(monitor.id, anchor);
+      if (!status.sessionId) throw new Error("长截图启动失败");
+      scrollModeRef.current = status.sessionId;
+      setScrollMode({ sessionId: status.sessionId, anchor, phase: status.phase });
+      if (status.note) setToast(status.note);
+    } catch (e) {
+      setToast(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [box, busy, monitor, scrollMode]);
+
+  /** Finish/cancel from the control bar or Escape. */
+  const stopScroll = useCallback(
+    async (action: "save" | "copy" | "cancel") => {
+      try {
+        const done = await api.scrollStop(action);
+        // The `scroll://done` listener performs the UI teardown; a null result
+        // (no session) still unwinds the local mode.
+        if (!done) exitScrollMode();
+      } catch (e) {
+        setToast(errorText(e));
+        exitScrollMode();
+      }
+    },
+    [exitScrollMode],
+  );
+
+  /**
+   * Decode the preview image and place it beside the selection using the
+   * reference's decoded algorithm (right -> left -> above -> below ->
+   * overlap), with V-aspect fit (maxW 360 / minW 240 / maxH 520, gap 10,
+   * edge 20).
+   */
+  const placePreview = useCallback(
+    async (p: ScrollPreview) => {
+      const anchor = scrollMode?.anchor;
+      if (!anchor) return;
+      const base = convertFileSrc(p.path);
+      const url = base + "?timestamp=" + Date.now();
+
+      const load = (): Promise<HTMLImageElement> => {
+        const cached = previewCache.current.get(base);
+        if (cached) return Promise.resolve(cached);
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            previewCache.current.set(base, img);
+            resolve(img);
+          };
+          img.onerror = reject;
+          img.src = base;
+        });
+      };
+
+      try {
+        const img = await load();
+        // The decode is async: the session may have finished (and the mode
+        // exited) while it ran. A stale decode must not resurrect the preview.
+        if (!scrollModeRef.current) return;
+        const aspect = img.naturalWidth / img.naturalHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        const MAX_W = 360;
+        const MIN_W = 240;
+        const MAX_H = 520;
+        const GAP = 10;
+        const EDGE = 20;
+
+        // V(l, a, maxW, maxH, minW): the reference's aspect-fit helper.
+        const fit = (w: number, maxH: number): { width: number; height: number } => {
+          let width = w;
+          let height = width / aspect;
+          if (height > maxH) {
+            height = maxH;
+            width = height * aspect;
+          }
+          if (width < MIN_W) {
+            width = MIN_W;
+            height = width / aspect;
+            if (height > maxH) {
+              height = maxH;
+              width = height * aspect;
+            }
+          }
+          return { width, height };
+        };
+
+        const baseFit = fit(MAX_W, MAX_H);
+        // Side placements cap the height so the thumbnail's bottom stays near
+        // the selection's bottom (the reference `g` helper).
+        const sideMaxH = Math.min(MAX_H, Math.max(anchor.y + anchor.height - EDGE, MIN_W / aspect));
+        const sideFit = fit(baseFit.width, sideMaxH);
+        const bottomOf = (h: number) => Math.max(anchor.y + anchor.height - h, EDGE);
+
+        let placed: { x: number; y: number; width: number; height: number };
+        if (vw - (anchor.x + anchor.width) >= MAX_W + GAP) {
+          placed = { ...sideFit, x: anchor.x + anchor.width + GAP, y: bottomOf(sideFit.height) };
+        } else if (anchor.x >= MAX_W + GAP) {
+          placed = { ...sideFit, x: anchor.x - sideFit.width - GAP, y: bottomOf(sideFit.height) };
+        } else if (anchor.y >= MAX_H + GAP) {
+          const h = Math.min(MAX_H, anchor.y - GAP);
+          const size = fit(Math.min(MAX_W, anchor.width), h);
+          placed = { ...size, x: anchor.x, y: Math.max(EDGE, anchor.y - size.height - GAP) };
+        } else if (vh - (anchor.y + anchor.height) >= MAX_H + GAP) {
+          const h = Math.min(MAX_H, vh - (anchor.y + anchor.height) - GAP);
+          const size = fit(Math.min(MAX_W, anchor.width), h);
+          placed = { ...size, x: anchor.x, y: anchor.y + anchor.height + GAP };
+        } else {
+          // Overlap fallback: inside the selection's own area.
+          const maxH = Math.min(MAX_H, anchor.height * 0.65);
+          const size = fit(Math.min(MAX_W, Math.max(MIN_W, anchor.width - 40)), maxH);
+          placed = { ...size, x: anchor.x + GAP, y: anchor.y + GAP };
+        }
+
+        setScrollPreview({ url, ...placed });
+      } catch {
+        // A failed decode (mid atomic-replace) keeps the last preview.
+      }
+    },
+    // Anchor identity: recompute only when the selection moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scrollMode?.anchor?.x, scrollMode?.anchor?.y, scrollMode?.anchor?.width, scrollMode?.anchor?.height],
+  );
+
+  /** Rust event wiring for the scroll session. */
+  useEffect(() => {
+    if (!scrollMode) return;
+    const sessionId = scrollMode.sessionId;
+    const unlisteners: Array<Promise<() => void>> = [];
+
+    unlisteners.push(
+      events.onScrollState((st) => {
+        if (st.sessionId !== sessionId) return;
+        setScrollMode((prev) => (prev ? { ...prev, phase: st.phase } : prev));
+        if (st.phase === "finished" || st.phase === "failed") {
+          setScrollTip({ kind: "bottom", text: st.note ?? "已完成" });
+        }
+      }),
+    );
+
+    unlisteners.push(
+      events.onScrollPreview((p) => {
+        if (p.sessionId !== sessionId) return;
+        void placePreview(p);
+      }),
+    );
+
+    unlisteners.push(
+      events.onScrollTip((t) => {
+        if (t.sessionId !== sessionId) return;
+        setScrollTip(t);
+        // Tips are transient in the reference; error tips persist longer.
+        const ms = t.kind === "error" ? 6000 : 3000;
+        window.setTimeout(() => setScrollTip((cur) => (cur === t ? null : cur)), ms);
+      }),
+    );
+
+    unlisteners.push(
+      events.onScrollDone((d) => {
+        if (d.sessionId !== sessionId) return;
+        if (d.message) setToast(d.message);
+        exitScrollMode();
+      }),
+    );
+
+    return () => {
+      for (const pr of unlisteners) pr.then((u) => u()).catch(() => undefined);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollMode?.sessionId, exitScrollMode, placePreview]);
+
   const reset = () => {
     setBox(null);
     setShapes([]);
@@ -1044,16 +1283,24 @@ export function Overlay({ monitorId }: Props) {
   // (resize arrows, crosshair) is not overridden by an inline root value.
   const cursor = tool === "picker" ? PICKER_CURSOR : undefined;
 
+  // Scroll-capture mode: all overlay chrome disappears so the live page shows
+  // through the (Rust-side click-through) window; only the reference-style
+  // hint, the live preview thumbnail and transient tips remain.
+  const inScroll = scrollMode !== null;
+
   return (
     <div className="overlay-root" style={{ cursor }} onContextMenu={(e) => e.preventDefault()}>
-      <div
-        className="overlay-stage-host"
-        style={{
-          width: stageSize.w,
-          height: stageSize.h,
-          backgroundImage: frameSrc ? `url(${frameSrc})` : undefined,
-        }}
-      />
+      {!inScroll && (
+        <div
+          className="overlay-stage-host"
+          style={{
+            width: stageSize.w,
+            height: stageSize.h,
+            backgroundImage: frameSrc ? `url(${frameSrc})` : undefined,
+          }}
+        />
+      )}
+      {!inScroll && (
       <Stage
         ref={stageRef}
         width={stageSize.w}
@@ -1076,12 +1323,14 @@ export function Overlay({ monitorId }: Props) {
           {draft && <ShapeNode shape={draft} source={sourceRef.current} />}
         </Layer>
       </Stage>
+      )}
 
       {/* The desktop image, the dimmer and the selection chrome live in DOM so
           they never end up in the exported annotation layer. */}
-      {frameSrc && (
+      {!inScroll && frameSrc && (
         <img className="overlay-frame" src={frameSrc} alt="" draggable={false} />
       )}
+      {!inScroll && (
       <div
         className="overlay-dim"
         style={
@@ -1095,7 +1344,8 @@ export function Overlay({ monitorId }: Props) {
             : undefined
         }
       />
-      {box && (
+      )}
+      {!inScroll && box && (
         <>
           <div
             className="overlay-box"
@@ -1129,7 +1379,7 @@ export function Overlay({ monitorId }: Props) {
         </>
       )}
 
-      {monitor && (
+      {monitor && !inScroll && (
         <Toolbar
           box={box}
           tool={tool}
@@ -1141,9 +1391,44 @@ export function Overlay({ monitorId }: Props) {
           onUndo={() => setShapes((prev) => prev.slice(0, -1))}
           onAction={(a: ToolbarAction) => {
             if (a === "cancel") void cancel();
+            else if (a === "scroll") void startScroll();
             else if (a === "extract" || a === "translate" || a === "explain" || a === "ask")
               void runAi(a);
             else void confirm(a);
+          }}
+        />
+      )}
+
+      {inScroll && scrollMode && (
+        <div
+          className="scroll-overlay"
+          style={{
+            left: scrollMode.anchor.x,
+            top: scrollMode.anchor.y,
+            width: scrollMode.anchor.width,
+            height: scrollMode.anchor.height,
+          }}
+        >
+          {scrollMode.phase === "recording" && !scrollTip && (
+            <div className="scroll-hint">截图过程中请不要手动滚动</div>
+          )}
+          {scrollTip && (
+            <div className={"scroll-tip " + scrollTip.kind}>{scrollTip.text}</div>
+          )}
+        </div>
+      )}
+
+      {scrollPreview && (
+        <img
+          className="scroll-preview"
+          src={scrollPreview.url}
+          alt=""
+          draggable={false}
+          style={{
+            left: scrollPreview.x,
+            top: scrollPreview.y,
+            width: scrollPreview.width,
+            height: scrollPreview.height,
           }}
         />
       )}
@@ -1245,7 +1530,7 @@ export function Overlay({ monitorId }: Props) {
         </div>
       )}
 
-      {!monitor && <div className="overlay-loading">正在抓取屏幕…</div>}
+      {!monitor && !inScroll && <div className="overlay-loading">正在抓取屏幕…</div>}
     </div>
   );
 }

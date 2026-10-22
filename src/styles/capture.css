@@ -720,3 +720,186 @@ textarea {
   font-size: 10px;
   color: var(--text-faint);
 }
+
+/* ---------- long screenshot (scroll capture) ---------- */
+
+/* Invisible container over the selection area: centres its children so the
+   hint/tip pills sit over the (now hidden) selection like the reference. */
+.scroll-overlay {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 101;
+}
+
+/* Reference-style hint pill, centred over the selection while the auto
+   scroller runs (`截图过程中请不要手动滚动`). */
+.scroll-hint {
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: #282d32;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Transient tips from the Rust state machine (拒绝硬拼 etc.). Kind tints
+   follow the reference's urgency: error = red, bottom = green. */
+.scroll-tip {
+  max-width: 100%;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: #282d32;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  pointer-events: none;
+  animation: scroll-tip-in 0.18s ease-out;
+}
+
+.scroll-tip.warn {
+  background: #4a3a1e;
+}
+
+.scroll-tip.error {
+  background: #58272b;
+}
+
+.scroll-tip.bottom,
+.scroll-tip.info {
+  background: #1f3d2b;
+}
+
+@keyframes scroll-tip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Live stitched-image thumbnail. Placed by the reference algorithm
+   (right → left → above → below → overlap); the 300ms opacity fade matches
+   the reference's transition. */
+.scroll-preview {
+  position: fixed;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.12);
+  background: #fff;
+  object-fit: fill;
+  z-index: 100;
+  opacity: 1;
+  transition: opacity 0.3s ease-in-out;
+  animation: scroll-preview-in 0.3s ease-out;
+  pointer-events: none;
+}
+
+@keyframes scroll-preview-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- scroll control bar (scrollbar window) ---------- */
+
+/* The window is transparent; this strip is everything that paints. Dark,
+   rounded, matching the overlay toolbar palette. */
+.scrollbar-root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.scrollbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  border-radius: 10px;
+  background: #282d32;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+
+.scrollbar-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: transparent;
+}
+
+.scrollbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #e8eaee;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.scrollbar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.scrollbar-btn:disabled {
+  color: #6b7280;
+  cursor: default;
+}
+
+.scrollbar-btn-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+}
+
+.scrollbar-btn-label {
+  white-space: nowrap;
+}
+
+/* Live `${w} × ${h}` readout, reference badge. */
+.scrollbar-badge {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: #282d32;
+  color: #e8eaee;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+
+.scrollbar-error {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #f87171;
+}

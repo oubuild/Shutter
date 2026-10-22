@@ -9,17 +9,24 @@
 //! failure pauses the auto-scroller with a tip instead of forcing a stitch
 //! (`拒绝硬拼`, fail closed).
 
+use crate::types::Rect;
+use anyhow::{anyhow, Result};
+use image::RgbaImage;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
+
+pub mod autoscroll;
+pub mod pipeline;
+pub mod stitch;
+pub mod types;
+
 use crate::scroll::pipeline::{decide, direction_reversed, median_recent, FrameDecision};
 use crate::scroll::stitch::Stitcher;
 use crate::scroll::types::{
     ScrollDone, ScrollFinishAction, ScrollPhase, ScrollPreview, ScrollStatus, ScrollTip,
 };
-use anyhow::{anyhow, Result};
-use image::RgbaImage;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
 
 /// Lines per injected wheel step (reference: 每次固定行数, with a watchdog).
 const SCROLL_LINES: i32 = 3;
@@ -56,7 +63,6 @@ struct Control {
 /// What the worker leaves behind when it exits.
 struct Finished {
     stitcher: Stitcher,
-    phase: ScrollPhase,
 }
 
 static ACTIVE: OnceLock<Mutex<Option<ActiveSession>>> = OnceLock::new();
@@ -161,7 +167,7 @@ impl Fe {
         }
         let path = dir.join(format!("preview-{}.png", self.session_id));
         let tmp = dir.join(format!("preview-{}.tmp", self.session_id));
-        let write = {
+        let write: std::io::Result<()> = {
             let mut buf = Vec::new();
             use image::ImageEncoder;
             let enc = image::codecs::png::PngEncoder::new_with_quality(
@@ -169,13 +175,15 @@ impl Fe {
                 image::codecs::png::CompressionType::Fast,
                 image::codecs::png::FilterType::NoFilter,
             );
-            enc.write_image(
+            let encoded = enc.write_image(
                 image.as_raw(),
                 image.width(),
                 image.height(),
                 image::ExtendedColorType::Rgba8,
-            )
-            .and_then(|_| std::fs::write(&tmp, &buf))
+            );
+            encoded
+                .map_err(std::io::Error::other)
+                .and_then(|_| std::fs::write(&tmp, &buf))
         };
         if let Err(e) = write {
             log::warn!("[长截图] 预览 PNG 写盘失败: {e}");
@@ -385,7 +393,7 @@ fn worker_loop(
         phase = ScrollPhase::Finished;
     }
     fe.state(phase, stitcher.height(), stitcher.width(), auto, note);
-    *control.result.lock().unwrap() = Some(Finished { stitcher, phase });
+    *control.result.lock().unwrap() = Some(Finished { stitcher });
     let _ = app.emit("scroll://worker-done", &session_id);
 }
 
@@ -414,6 +422,7 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
     let scale = monitor.scale_factor;
     let pixel_rect = crate::compose::to_pixel_rect(rect, scale, frame.width(), frame.height())?;
     let first = crate::compose::crop(&frame, pixel_rect)?;
+    let first_size = first.dimensions();
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let control = Arc::new(Control {
@@ -477,8 +486,8 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
     Ok(ScrollStatus {
         session_id: Some(session_id),
         phase: ScrollPhase::Recording,
-        height: first.height(),
-        width: first.width(),
+        height: first_size.1,
+        width: first_size.0,
         auto_scroll,
         note: if auto_scroll {
             None
@@ -572,18 +581,19 @@ pub fn resume() -> ScrollStatus {
 /// Tear the session down without producing an image (reference
 /// `cancel_scroll_screenshot`).
 pub fn cancel(app: &AppHandle) {
-    let mut guard = active().lock().unwrap();
-    if let Some(mut s) = guard.take() {
-        s.control.stop.store(true, Ordering::SeqCst);
-        s.control.pause.store(false, Ordering::SeqCst);
-        if let Ok(mut w) = s.worker.lock() {
-            if let Some(handle) = w.take() {
-                let _ = handle.join();
+    {
+        let mut guard = active().lock().unwrap();
+        if let Some(s) = guard.take() {
+            s.control.stop.store(true, Ordering::SeqCst);
+            s.control.pause.store(false, Ordering::SeqCst);
+            if let Ok(mut w) = s.worker.lock() {
+                if let Some(handle) = w.take() {
+                    let _ = handle.join();
+                }
             }
+            // Drop order: the listener thread joins on drop.
         }
-        // Drop order: the listener thread joins on drop.
     }
-    let _ = guard;
     if let Some(bar) = app.get_webview_window("scroll-bar") {
         let _ = bar.close();
     }
@@ -601,34 +611,36 @@ pub fn cancel(app: &AppHandle) {
 /// command implementation — reproduced here to avoid a webview round trip,
 /// since the overlay may be mid-teardown) and writes the final PNG.
 pub fn stop(app: &AppHandle, action: ScrollFinishAction) -> Result<ScrollDone> {
-    // Snapshot and stop the worker.
-    let (id, result, auto) = {
+    // Signal stop, then join the worker OUTSIDE the global lock (it may need
+    // one loop iteration to notice; holding the mutex meanwhile would wedge
+    // scroll_status/pause from the control bar).
+    let (id, control) = {
         let mut guard = active().lock().unwrap();
         match guard.as_mut() {
             Some(s) => {
                 s.control.pause.store(false, Ordering::SeqCst);
                 s.control.stop.store(true, Ordering::SeqCst);
-                let worker = s.worker.lock().unwrap().take();
-                if let Some(handle) = worker {
-                    // The worker exits within one loop iteration; join it.
-                    // Guard the lock so a slow join cannot poison the world.
-                    drop(guard);
-                    let _ = handle.join();
-                    let guard = active().lock().unwrap();
-                    let s = guard.as_ref().expect("session vanished");
-                    (
-                        s.id.clone(),
-                        s.control.result.lock().unwrap().take(),
-                        s.auto_scroll,
-                    )
-                } else {
-                    let r = s.control.result.lock().unwrap().take();
-                    (s.id.clone(), r, s.auto_scroll)
-                }
+                // Detach the worker handle: it observes the stop flag within
+                // one loop iteration and exits by itself.
+                let _ = s.worker.lock().unwrap().take();
+                (s.id.clone(), Arc::clone(&s.control))
             }
             None => return Err(anyhow!("没有正在进行的滚动截图")),
         }
     };
+    let _ = control;
+
+    // The worker observes the stop flag within one iteration (worst case a
+    // settle sleep); poll the result slot briefly instead of joining a handle
+    // we no longer own.
+    let mut result = None;
+    for _ in 0..100 {
+        result = control.result.lock().unwrap().take();
+        if result.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     // Tear down windows + restore overlay.
     cancel(app);
@@ -663,7 +675,6 @@ pub fn stop(app: &AppHandle, action: ScrollFinishAction) -> Result<ScrollDone> {
 
     // Encode the final PNG once.
     let png = crate::compose::to_png(&image)?;
-    let _ = auto; // manual/auto only affects notes, not the finish path.
 
     match action {
         ScrollFinishAction::Save => {

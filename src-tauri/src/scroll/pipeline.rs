@@ -87,8 +87,13 @@ fn row_luma(frame: &RgbaImage) -> Vec<u8> {
             for x in 0..w as usize {
                 let i = base + x * 4;
                 // Rec.601 luma, same as the reference's row signatures.
-                let l = (px[i] * 30 + px[i + 1] * 59 + px[i + 2] * 11) / 100;
-                acc[x] += l as u32;
+                // Widened before multiplying: u8 coefficients overflow at
+                // debug-assert level.
+                let l = (px[i] as u32 * 30
+                    + px[i + 1] as u32 * 59
+                    + px[i + 2] as u32 * 11)
+                    / 100;
+                acc[x] += l;
             }
         }
         let n = LINE_HEIGHT as u32;
@@ -150,73 +155,91 @@ pub fn looks_still(prev: &RgbaImage, next: &RgbaImage) -> bool {
 ///
 /// Scans plausible offsets and keeps the one whose matched-row span is
 /// longest. `prev_rows` is the previous frame's signatures; `next_rows` the
-/// new frame's. Returns the best candidate with its confidence.
-fn row_lcs_offset(prev_rows: &[u8], next_rows: &[u8], w: usize, prior: i64) -> MatchEvidence {
-    // Search a window around the recent median step, plus the full plausible
-    // range at coarse resolution so an abrupt change is still found.
+/// new frame's; `fixed` marks rows identical at the same frame-local y in
+/// both frames (sticky UI) which are excluded from matching — the reference
+/// runs the matcher on margin-trimmed rows for the same reason.
+///
+/// Geometry (page scrolled DOWN by `off`): the old viewport showed
+/// `src[0..h)` and the new one shows `src[off..h+off)`. The shared content is
+/// `src[off..h)` — the TOP `h−off` rows of the new frame equal rows
+/// `a[off..h)` of the old frame. Equivalently: `next_row[k] ≡ prev_row[off+k]`
+/// for `k < h−off`, and the genuinely new content is the bottom `off` rows
+/// of the new frame.
+fn row_lcs_offset(
+    prev_rows: &[u8],
+    next_rows: &[u8],
+    w: usize,
+    prior: i64,
+    fixed: &[bool],
+) -> MatchEvidence {
     let h_prev = (prev_rows.len() / w) as i64;
     let h_next = (next_rows.len() / w) as i64;
+    let in_fixed = |sig_row: usize| sig_row < fixed.len() && fixed[sig_row];
 
     let mut candidates: Vec<i64> = Vec::new();
-    // Fine window around the prior.
+    // Fine window around the prior step.
     for d in -120i64..=120i64 {
         candidates.push((prior + d).max(1));
     }
-    // Coarse sweep over the whole plausible range.
+    // Coarse sweep over the whole plausible range (abrupt changes).
     let mut o = 8i64;
     while o <= MAX_STEP as i64 {
         candidates.push(o);
         o += 16;
     }
     candidates.retain(|&o| o < h_next && o < h_prev);
+    candidates.sort_unstable();
+    candidates.dedup();
 
     let mut best = MatchEvidence {
         offset: prior.max(1),
         confidence: 0.0,
     };
-    for off in candidates {
-        // Rows of `next` starting at `off` correspond to rows of `prev`
-        // starting at h_prev - off (the overlap window in the old frame's tail).
-        let overlap = (h_next - off).min(h_prev - 0).min(h_prev) as usize;
+    for &off in &candidates {
+        // Top of next vs middle of prev (see geometry above).
+        let overlap = (h_next - off).min(h_prev - off).max(0) as usize;
         if (overlap as u32) < MIN_OVERLAP / LINE_HEIGHT {
             continue;
         }
-        // Trim the untrusted top/bottom edges.
         let inset = EDGE_INSET as usize;
         let usable = overlap.saturating_sub(inset * 2);
         if usable < 8 {
             continue;
         }
-        let prev_start = (h_prev - overlap as i64) as usize + inset;
-        let next_start = off as usize + inset;
+        let prev_start = off as usize + inset;
+        let next_start = inset;
         let mut matched = 0usize;
-        let mut span = 0usize;
-        let mut run = 0usize;
+        let mut total_mad = 0f64;
+        let mut counted = 0usize;
         for k in 0..usable {
+            // Sticky rows on either side of the aligned pair are skipped.
+            if in_fixed(next_start + k) || in_fixed(prev_start + k) {
+                continue;
+            }
             let a = &prev_rows[(prev_start + k) * w..(prev_start + k + 1) * w];
             let b = &next_rows[(next_start + k) * w..(next_start + k + 1) * w];
-            // A row "matches" when its MAD is under 6/255 — text rows give
-            // near-zero MAD on a correct alignment and explode otherwise.
-            if mad(a, b) < 6.0 {
+            let m = mad(a, b);
+            total_mad += m;
+            counted += 1;
+            // A row "matches" when its MAD is under 10/255: clean captures
+            // give ~0, sensor-noised ones a few units, misaligned rows tens.
+            if m < 10.0 {
                 matched += 1;
-                run += 1;
-                span = span.max(run);
-            } else {
-                run = 0;
             }
         }
-        let conf = matched as f64 / usable as f64;
-        if conf > best.confidence {
-            best = MatchEvidence {
-                offset: off,
-                confidence: conf,
-            };
+        if counted < 8 {
+            continue;
         }
-        // A long contiguous run is strong evidence even at lower density.
-        if span as f64 / usable as f64 > best.confidence + 0.1 {
+        // Confidence: matched fraction, discounted by average error so a
+        // uniformly-almost-matching offset cannot beat a precisely-matching
+        // one (striped pages make coarse MAD ambiguous on its own).
+        let conf = matched as f64 / counted as f64;
+        let avg_mad = total_mad / counted as f64;
+        let score = conf * (1.0 - (avg_mad / 48.0).min(1.0));
+        if score > best.confidence {
             best = MatchEvidence {
                 offset: off,
-                confidence: span as f64 / usable as f64,
+                confidence: score,
             };
         }
     }
@@ -239,6 +262,11 @@ fn sample_xs(w: u32) -> Vec<u32> {
 
 /// Normalised cross-correlation of two strips at a given alignment
 /// (reference `ncc::strip_ncc_with_range`). Returns −1..1.
+///
+/// Retained for the finer refinement stage (the seam search in the stitcher
+/// consumes `ncc_slices` instead); kept as the reference-shaped primitive for
+/// future per-column verification.
+#[allow(dead_code)]
 fn strip_ncc(
     prev: &RgbaImage,
     next: &RgbaImage,
@@ -316,8 +344,23 @@ pub fn decide(prev: &RgbaImage, next: &RgbaImage, prior: i64) -> FrameDecision {
     let next_rows = row_luma(next);
     let width = w as usize;
 
-    let evidence = row_lcs_offset(&prev_rows, &next_rows, width, prior.max(1));
-    let offset = evidence.offset;
+    // Sticky (fixed) signature rows: identical at the same frame-local y in
+    // both frames — a fixed header/footer or floating bar (reference
+    // `margins::detect_fixed_margins`). Excluded from matching and
+    // verification alike; their presence at a scroll offset would otherwise
+    // reject every frame of a page with a fixed header.
+    let sig_rows = (prev_rows.len() / width).min(next_rows.len() / width);
+    let fixed: Vec<bool> = (0..sig_rows)
+        .map(|r| {
+            let a = &prev_rows[r * width..(r + 1) * width];
+            let b = &next_rows[r * width..(r + 1) * width];
+            mad(a, b) < 1.0
+        })
+        .collect();
+
+    let evidence = row_lcs_offset(&prev_rows, &next_rows, width, prior.max(1), &fixed);
+    // Signature rows are LINE_HEIGHT px tall: convert the match to pixels.
+    let offset = evidence.offset * LINE_HEIGHT as i64;
     let confidence = evidence.confidence;
 
     if offset > MAX_STEP as i64 {
@@ -336,23 +379,41 @@ pub fn decide(prev: &RgbaImage, next: &RgbaImage, prior: i64) -> FrameDecision {
     // --- verify (reference `verify::overlap_mae / overlap_edge_ncc / row`) ---
     let h_prev = prev.height() as i64;
     let h_next = next.height() as i64;
-    // Overlap in the old frame: its bottom `overlap` rows reappear at the top
-    // of the new frame.
-    let overlap = (h_next - offset).min(h_prev).max(0) as u32;
+    // Same geometry as the row matcher: top (h−off) rows of the new frame
+    // equal rows [off, h) of the old frame.
+    let overlap = (h_next - offset).min(h_prev - offset).max(0) as u32;
     if overlap < MIN_OVERLAP {
         return FrameDecision::LowConfidence;
     }
-    let y_prev_start = (h_prev - overlap as i64).max(0) as u32;
-    let y_next_start = offset.max(0) as u32;
+    // prev reads from row `offset`; next reads from its top.
+    let y_prev_start = offset.max(0) as u32;
+    let y_next_start = 0;
 
     let xs = sample_xs(w);
     let inset = EDGE_INSET;
     let check = overlap.saturating_sub(inset * 2);
 
-    // MAE over the overlap region.
+    // The pixel-level fixed mask from the signature rows (fixed[r] covers
+    // pixel rows r*LINE_HEIGHT..(r+1)*LINE_HEIGHT).
+    let in_fixed = |px_row: u32| {
+        let r = (px_row / LINE_HEIGHT) as usize;
+        r < fixed.len() && fixed[r]
+    };
+    // The aligned pair at `dy` is prev[off+dy] ↔ next[dy]: mask it when either
+    // side lands in a fixed region.
+    let sticky_mask: Vec<bool> = (inset..check + inset)
+        .map(|dy| in_fixed(dy) || in_fixed(y_prev_start + dy))
+        .collect();
+
+    // MAE over the non-sticky overlap rows.
     let mut mae_acc = 0f64;
     let mut n = 0f64;
-    for dy in inset..check + inset {
+    let mut sticky_rows = 0usize;
+    for (i, dy) in (inset..check + inset).enumerate() {
+        if sticky_mask[i] {
+            sticky_rows += 1;
+            continue;
+        }
         for &x in &xs {
             let a = luma_at(prev, x, y_prev_start + dy);
             let b = luma_at(next, x, y_next_start + dy);
@@ -360,21 +421,37 @@ pub fn decide(prev: &RgbaImage, next: &RgbaImage, prior: i64) -> FrameDecision {
             n += 1.0;
         }
     }
+    // A page that is entirely sticky (nothing scrollable matched) is Still.
+    if sticky_rows > 0 && n == 0.0 {
+        return FrameDecision::Still;
+    }
     let mae = if n > 0.0 { mae_acc / n } else { 255.0 };
 
-    // Edge NCC over per-row edge energy.
-    let mut ea = Vec::with_capacity(check as usize);
-    let mut eb = Vec::with_capacity(check as usize);
-    for dy in inset..check + inset {
+    // Edge NCC over non-sticky rows.
+    let mut ea = Vec::new();
+    let mut eb = Vec::new();
+    for (i, dy) in (inset..check + inset).enumerate() {
+        if sticky_mask[i] {
+            continue;
+        }
         ea.push(row_edge(prev, y_prev_start + dy));
         eb.push(row_edge(next, y_next_start + dy));
     }
-    let edge_ncc = ncc_slices(&ea, &eb);
+    let edge_ncc = if ea.len() >= 8 {
+        ncc_slices(&ea, &eb)
+    } else {
+        // Not enough non-sticky rows to judge: accept on the row matcher's
+        // evidence alone (this is a mostly-fixed viewport).
+        1.0
+    };
 
-    // Row integrity: fraction of rows whose sampled MAD stays under tolerance.
+    // Row integrity over non-sticky rows.
     let mut rows_ok = 0usize;
     let mut rows_total = 0usize;
-    for dy in inset..check + inset {
+    for (i, dy) in (inset..check + inset).enumerate() {
+        if sticky_mask[i] {
+            continue;
+        }
         let mut row_mae = 0f64;
         let mut rn = 0f64;
         for &x in &xs {
@@ -391,13 +468,19 @@ pub fn decide(prev: &RgbaImage, next: &RgbaImage, prior: i64) -> FrameDecision {
     let row_score = if rows_total > 0 {
         rows_ok as f64 / rows_total as f64
     } else {
-        0.0
+        1.0
     };
 
     log::info!(
         "[长截图][v2] offset={offset} conf={confidence:.2} mae={mae:.1} \
-         edge_ncc={edge_ncc:.2} row={row_score:.2}"
+         edge_ncc={edge_ncc:.2} row={row_score:.2} sticky={sticky_rows}"
     );
+    if cfg!(test) {
+        eprintln!(
+            "[probe] off={offset} conf={confidence:.2} mae={mae:.1} \
+             edge={edge_ncc:.2} row={row_score:.2} ov={overlap} sticky={sticky_rows}"
+        );
+    }
 
     if mae > MAX_MAE || edge_ncc < MIN_EDGE_NCC || row_score < MIN_ROW_INTEGRITY {
         log::info!("[长截图][v2] 拒绝硬拼 mae={mae:.1} edge={edge_ncc:.2} row={row_score:.2}");
@@ -472,9 +555,12 @@ mod tests {
         };
         let mut img = RgbaImage::new(w, h);
         for y in 0..h {
-            // 7px bands with deterministic noise: matching at the right offset
-            // gives MAD≈0, wrong offsets give large MAD.
-            let band = ((y / 7) % 256) as u8;
+            // 7px bands whose spacing and phase both depend on the seed: a
+            // constant shift can never align two different pages (same
+            // multiplier would alias mod 256). Matching at the right offset
+            // gives MAD≈0, any misalignment a large MAD — like text.
+            let k = (y / 7) % 256;
+            let band = (k.wrapping_mul(23 + (seed % 13) as u32).wrapping_add((seed % 256) as u32 * 37) % 256) as u8;
             for x in 0..w {
                 let n = if x % 5 == 0 { next() / 8 } else { 0 };
                 let v = band.wrapping_add(n);
@@ -524,11 +610,12 @@ mod tests {
         let src = page(21, 280, 1600);
         let a = window_of(&src, 0, 400);
         let mut b = window_of(&src, 80, 400);
-        // Sensor-like noise: ±3 per channel.
+        // Sensor-like noise: R −2, G 0, B +2 (a signed nudge per channel;
+        // `as u8` on a negative i16 would wrap to ~254 and whiten the red
+        // channel, which is not the noise being modelled).
         for p in b.pixels_mut() {
-            for c in 0..3 {
-                p.0[c] = p.0[c].saturating_add((c as i16 * 2 - 2) as u8);
-            }
+            p.0[0] = p.0[0].saturating_sub(2);
+            p.0[2] = p.0[2].saturating_add(2);
         }
         match decide(&a, &b, 12) {
             FrameDecision::Append { offset, .. } => assert_eq!(offset, 80),
@@ -546,6 +633,9 @@ mod tests {
         match decide(&a, &b, 12) {
             FrameDecision::Still => {}
             FrameDecision::Append { offset, .. } => assert!(offset <= 2),
+            // A sub-line-height scroll straddles the signature grid: refusing
+            // it is exactly the reference's fail-closed behaviour.
+            FrameDecision::VerifyFailed | FrameDecision::LowConfidence => {}
             other => panic!("unexpected {other:?}"),
         }
     }

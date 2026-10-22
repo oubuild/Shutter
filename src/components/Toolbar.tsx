@@ -34,6 +34,7 @@ export type ToolbarAction =
   | "copy"
   | "save"
   | "pin"
+  | "scroll"
   | "extract"
   | "translate"
   | "explain"
@@ -77,8 +78,10 @@ const AI_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
 ];
 
 /** Output actions. Copy keeps the plain icon style like every other button,
- *  matching the reference bar (no filled primary control). */
+ *  matching the reference bar (no filled primary control). 长截图 sits first
+ *  in this group, as in the reference bar (长截图(C)/贴图(R)/保存/复制). */
 const OUT_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
+  { id: "scroll", label: "长截图", key: "C" },
   { id: "pin", label: "贴图", key: "R" },
   { id: "save", label: "保存", key: "⌘S" },
   { id: "copy", label: "复制", key: "⏎" },
@@ -767,6 +770,11 @@ const ICONS: Record<string, string> = {
   ),
 
   // ---- output ----
+  // ---- output ----
+  // Long screenshot: a page with a downward flow arrow (scroll-and-stitch).
+  scroll: S(
+    '<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 10.5h6"/><path d="M12 13v6"/><path d="m9.5 16.5 2.5 2.5 2.5-2.5"/>',
+  ),
   pin: S('<path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/>'),
   save: S('<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4 18h16"/>'),
   copy: S(
