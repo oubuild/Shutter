@@ -29,7 +29,7 @@ importers:
     devDependencies:
       '@antfu/design':
         specifier: ^0.6.0
-        version: 0.6.0(@unocss/core@66.11.0)(colorjs.io@0.7.1)(unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)))(vue@3.5.44(typescript@5.9.3))
+        version: 0.6.0(@unocss/core@66.11.0)(colorjs.io@0.7.1)(unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1)))(vue@3.5.44(typescript@5.9.3))
       '@tauri-apps/cli':
         specifier: ^2.9.0
         version: 2.12.3
@@ -44,7 +44,10 @@ importers:
         version: 66.11.0
       '@vitejs/plugin-react':
         specifier: ^4.3.4
-        version: 4.7.0(vite@6.4.4(jiti@2.7.0))
+        version: 4.7.0(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))
+      bumpp:
+        specifier: ^12.3.0
+        version: 12.3.0
       colorjs.io:
         specifier: ^0.7.1
         version: 0.7.1
@@ -53,10 +56,10 @@ importers:
         version: 5.9.3
       unocss:
         specifier: ^66.11.0
-        version: 66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0))
+        version: 66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))
       vite:
         specifier: ^6.0.7
-        version: 6.4.4(jiti@2.7.0)
+        version: 6.4.4(jiti@2.7.0)(yaml@2.9.1)
 
 packages:
 
@@ -892,6 +895,9 @@ packages:
     peerDependencies:
       vue: ^3.5.0
 
+  args-tokenizer@0.3.0:
+    resolution: {integrity: sha512-xXAd7G2Mll5W8uo37GETpQ2VrE84M181Z7ugHFGQnJZ50M2mbOv0osSZ9VsSgPfJQ+LVG0prSi0th+ELMsno7Q==}
+
   baseline-browser-mapping@2.11.29:
     resolution: {integrity: sha512-YeesxhUmR4h5y5V8KF8iBCqJb8YFrBJ++XBTeGcWIaQOYXGN19JM0FoiOjAhwuDoln8owMgXcWBmgHtYSkky2w==}
     engines: {node: '>=6.0.0'}
@@ -900,6 +906,11 @@ packages:
   browserslist@4.29.3:
     resolution: {integrity: sha512-1R4kiYKXGViqEN0CnoDrXc1StD9niAwu+j2dukWzrD4bJgsD4lDmEp0CRbc6E/vYJIfTHwPmwyaKtVSudICdPA==}
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
+    hasBin: true
+
+  bumpp@12.3.0:
+    resolution: {integrity: sha512-YgW09sgbIGQmAD/Jk7FEGP0tm0PeDz+Zgk+IAk+MOHhb/98pj/l3CgkxSjd7C1O99JPxTNwS+bPOTNaHuNh6lQ==}
+    engines: {node: ^22.18.0 || ^24.11.0 || >=26.0.0}
     hasBin: true
 
   cac@7.1.0:
@@ -1045,6 +1056,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
 
   konva@9.3.22:
     resolution: {integrity: sha512-yQI5d1bmELlD/fowuyfOp9ff+oamg26WOCkyqUyc+nczD/lhRa3EvD2MZOoc4c1293TAubW9n34fSQLgSeEgSw==}
@@ -1237,6 +1251,10 @@ packages:
     peerDependencies:
       browserslist: '>= 4.21.0'
 
+  verkit@0.4.1:
+    resolution: {integrity: sha512-mMVzj0TXExtVdlDEq+Mzp0eyOuyznNpFobNM3uAqe3HVm/Ps2c+u17BligMkZjZCA6EiXpoon8iRTer3iu40SQ==}
+    engines: {node: '>=18.12.0'}
+
   vite@6.4.4:
     resolution: {integrity: sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
@@ -1305,12 +1323,17 @@ packages:
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
+  yaml@2.9.1:
+    resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
 snapshots:
 
-  '@antfu/design@0.6.0(@unocss/core@66.11.0)(colorjs.io@0.7.1)(unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)))(vue@3.5.44(typescript@5.9.3))':
+  '@antfu/design@0.6.0(@unocss/core@66.11.0)(colorjs.io@0.7.1)(unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1)))(vue@3.5.44(typescript@5.9.3))':
     dependencies:
       '@vueuse/core': 15.0.0(vue@3.5.44(typescript@5.9.3))
-      unocss: 66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0))
+      unocss: 66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))
       vue: 3.5.44(typescript@5.9.3)
     optionalDependencies:
       '@unocss/core': 66.11.0
@@ -1933,7 +1956,7 @@ snapshots:
     dependencies:
       '@unocss/core': 66.11.0
 
-  '@unocss/vite@66.11.0(cac@7.1.0)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0))':
+  '@unocss/vite@66.11.0(cac@7.1.0)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@jridgewell/remapping': 2.3.5
       '@unocss/config': 66.11.0
@@ -1944,14 +1967,14 @@ snapshots:
       pathe: 2.0.3
       tinyglobby: 0.2.17
       unplugin-utils: 0.3.2
-      vite: 6.4.4(jiti@2.7.0)
+      vite: 6.4.4(jiti@2.7.0)(yaml@2.9.1)
     transitivePeerDependencies:
       - '@devframes/agentic'
       - cac
       - ocache
       - srvx
 
-  '@vitejs/plugin-react@4.7.0(vite@6.4.4(jiti@2.7.0))':
+  '@vitejs/plugin-react@4.7.0(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/plugin-transform-react-jsx-self': 7.29.7(@babel/core@7.29.7)
@@ -1959,7 +1982,7 @@ snapshots:
       '@rolldown/pluginutils': 1.0.0-beta.27
       '@types/babel__core': 7.20.5
       react-refresh: 0.17.0
-      vite: 6.4.4(jiti@2.7.0)
+      vite: 6.4.4(jiti@2.7.0)(yaml@2.9.1)
     transitivePeerDependencies:
       - supports-color
 
@@ -2030,6 +2053,8 @@ snapshots:
     dependencies:
       vue: 3.5.44(typescript@5.9.3)
 
+  args-tokenizer@0.3.0: {}
+
   baseline-browser-mapping@2.11.29: {}
 
   browserslist@4.29.3:
@@ -2039,6 +2064,18 @@ snapshots:
       electron-to-chromium: 1.5.459
       node-releases: 2.0.59
       update-browserslist-db: 1.3.4(browserslist@4.29.3)
+
+  bumpp@12.3.0:
+    dependencies:
+      args-tokenizer: 0.3.0
+      cac: 7.1.0
+      jsonc-parser: 3.3.1
+      package-manager-detector: 1.9.0
+      tinyexec: 1.3.1
+      tinyglobby: 0.2.17
+      unconfig: 7.5.0
+      verkit: 0.4.1
+      yaml: 2.9.1
 
   cac@7.1.0: {}
 
@@ -2158,6 +2195,8 @@ snapshots:
   jsesc@3.1.0: {}
 
   json5@2.2.3: {}
+
+  jsonc-parser@3.3.1: {}
 
   konva@9.3.22: {}
 
@@ -2346,7 +2385,7 @@ snapshots:
       quansync: 1.0.0
       unconfig-core: 7.5.0
 
-  unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)):
+  unocss@66.11.0(@oxc-project/types@0.153.0)(cac@7.1.0)(rollup@4.64.9)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1)):
     dependencies:
       '@unocss/cli': 66.11.0
       '@unocss/core': 66.11.0
@@ -2365,7 +2404,7 @@ snapshots:
       '@unocss/transformer-compile-class': 66.11.0
       '@unocss/transformer-directives': 66.11.0
       '@unocss/transformer-variant-group': 66.11.0
-      '@unocss/vite': 66.11.0(cac@7.1.0)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0))
+      '@unocss/vite': 66.11.0(cac@7.1.0)(srvx@1.0.6)(vite@6.4.4(jiti@2.7.0)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@devframes/agentic'
       - '@oxc-project/types'
@@ -2387,7 +2426,9 @@ snapshots:
       escalade: 3.2.0
       picocolors: 1.1.1
 
-  vite@6.4.4(jiti@2.7.0):
+  verkit@0.4.1: {}
+
+  vite@6.4.4(jiti@2.7.0)(yaml@2.9.1):
     dependencies:
       esbuild: 0.25.12
       fdir: 6.5.0(picomatch@4.0.7)
@@ -2398,6 +2439,7 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
       jiti: 2.7.0
+      yaml: 2.9.1
 
   vscode-jsonrpc@9.0.3: {}
 
@@ -2425,3 +2467,5 @@ snapshots:
       typescript: 5.9.3
 
   yallist@3.1.1: {}
+
+  yaml@2.9.1: {}

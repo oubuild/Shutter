@@ -90,6 +90,23 @@ src-tauri/src/
 坐标约定见 [`src-tauri/src/types.rs`](src-tauri/src/types.rs) 顶部注释：前端只传 CSS px，
 Rust 在 `compose::to_pixel_rect` 里**只做一次** `× scale_factor`。
 
+## 发版
+
+发布完全由人手动触发，且只走 tag：本地跑 `pnpm release`（基于 antfu 的
+[bumpp](https://github.com/antfu/bumpp)），交互式选择新版本号后，它会同步
+`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 与
+`src-tauri/Cargo.lock` 四处版本，提交 `chore: release vX.Y.Z` 并推送 `v*` tag。
+
+tag 推送后 CI 接管：
+
+1. [changelogithub](https://github.com/antfu/changelogithub) 从 Conventional
+   Commits 生成变更日志，创建**草稿** Release
+2. 四个平台各自构建安装包并传到该 Release
+3. 全部成功且安装包齐全后，publish job 自动把草稿发布为正式 Release
+
+任一平台失败则草稿保持原状，由人决定重试或修复。约定：功能提交用
+`feat:` / `fix:` / `chore:` 等规范前缀，changelog 会按此分组。
+
 ## 测试
 
 ```bash

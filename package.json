@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "app:dev": "tauri dev",
     "app:build": "tauri build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
@@ -28,6 +29,7 @@
     "@types/react-dom": "^18.3.1",
     "@unocss/transformer-directives": "^66.11.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "bumpp": "^12.3.0",
     "colorjs.io": "^0.7.1",
     "typescript": "^5.7.2",
     "unocss": "^66.11.0",
