@@ -179,6 +179,26 @@ pub struct GalleryItem {
     pub created_at: i64,
 }
 
+/// An on-screen window, for the overlay's hover-to-select.
+///
+/// Coordinates follow the [`MonitorInfo`] contract: **logical points** in the
+/// global display space (top-left origin, y-down), so the frontend maps a
+/// window onto a monitor by subtracting the monitor origin — no scaling.
+/// The list is ordered front-to-back as the window server reports it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowInfo {
+    pub id: u64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Owning process name, e.g. "Safari" (what the highlight chip shows).
+    pub owner: String,
+    /// Window title, when the system exposes one (needs Screen Recording).
+    pub title: String,
+}
+
 /// Well-known OpenAI-compatible endpoints offered in the settings UI.
 ///
 /// These are only suggestions: any endpoint that accepts the OpenAI chat

@@ -3,8 +3,12 @@
  *
  * The overlay opens it with `?view=chat&crop=<id>`; the PNG stays in Rust
  * (only a preview data URL enters the webview) and answers stream in over
- * `ai://delta` / `ai://done`, matched by `requestId`. Extract results land in
- * the dedicated recognition card; every other action joins the conversation.
+ * `ai://delta` / `ai://done`, matched by `requestId`.
+ *
+ * The four AI actions are tabs, not a conversation log: each keeps its own
+ * result for the current crop and clicking a tab switches the result card.
+ * 结果跟着截图走 — a new crop resets every tab. Free questions live in the
+ * 对话 tab. Copy is a hover-revealed icon, never a bordered button.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Confirm } from "../components/Confirm";
@@ -17,33 +21,45 @@ import {
   type Settings,
 } from "../lib/ipc";
 
+/** The AI actions, each shown as a tab with its own per-crop result. */
+type ActionTab = "extract" | "translate" | "explain" | "reply";
+/** Tabs of the result card: the four actions plus free conversation. */
+type Tab = ActionTab | "chat";
+
 type Message = {
   id: string;
   role: "user" | "assistant";
   text: string;
   /** Set on assistant placeholders so stream events can find their message. */
   requestId?: string;
-  action?: AiAction;
   streaming?: boolean;
   error?: string;
 };
 
-type OcrState = {
+type ActState = {
   status: "idle" | "streaming" | "done" | "error";
   text: string;
   error?: string;
-  /** Live request owning the card; cleared once the stream settles. */
+  /** Live request owning this tab; cleared once the stream settles. */
   requestId?: string;
 };
 
-const IDLE_OCR: OcrState = { status: "idle", text: "" };
+const IDLE_ACT: ActState = { status: "idle", text: "" };
 
-/** Secondary toolbar actions. "extract" is the primary button, "ask" lives in the input box. */
-const ACTIONS: ReadonlyArray<{ action: AiAction; label: string }> = [
-  { action: "translate", label: "翻译" },
-  { action: "explain", label: "解释" },
-  { action: "reply", label: "回复建议" },
+const ACTION_TABS: ReadonlyArray<{ id: ActionTab; label: string }> = [
+  { id: "extract", label: "提取文字" },
+  { id: "translate", label: "翻译" },
+  { id: "explain", label: "解释" },
+  { id: "reply", label: "回复建议" },
 ];
+
+const TAB_LABEL: Record<Tab, string> = {
+  extract: "提取文字",
+  translate: "翻译",
+  explain: "解释",
+  reply: "回复建议",
+  chat: "对话",
+};
 
 const EMPTY_HINT = "请先截图，再从工具条打开 AI 助手";
 const DEFAULT_LANG = "简体中文";
@@ -84,10 +100,64 @@ function CaptureIcon() {
   );
 }
 
+/** 14px hover-revealed action glyphs; the era of bordered 复制 buttons is over. */
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="5.75" y="5.75" width="8" height="8" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M10.25 3.75v-.2a1.8 1.8 0 0 0-1.8-1.8H4.05a1.8 1.8 0 0 0-1.8 1.8v4.4a1.8 1.8 0 0 0 1.8 1.8h.2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function RerunIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2.6h-2.6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M11.3 2.6a1.65 1.65 0 0 1 2.34 2.34L5.4 13.2l-3 .66.66-3z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+const IDLE_ACTS: Record<ActionTab, ActState> = {
+  extract: IDLE_ACT,
+  translate: IDLE_ACT,
+  explain: IDLE_ACT,
+  reply: IDLE_ACT,
+};
+
 export function Chat() {
   const initialCrop = new URLSearchParams(window.location.search).get("crop") ?? "";
 
   const [cropId, setCropId] = useState(initialCrop);
+  const [tab, setTab] = useState<Tab>("extract");
+  /** Per-action results for the current crop; clicking a tab switches to it. */
+  const [acts, setActs] = useState<Record<ActionTab, ActState>>(IDLE_ACTS);
+  /** 对话 tab only: the free-form question thread. */
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -95,7 +165,6 @@ export function Chat() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const [ocr, setOcr] = useState<OcrState>(IDLE_OCR);
   const [zoom, setZoom] = useState<"fit" | number>("fit");
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [conn, setConn] = useState<{ state: "checking" | "ok" | "fail"; detail: string }>({
@@ -104,7 +173,6 @@ export function Chat() {
   });
   const [models, setModels] = useState<string[]>([]);
   const [modelOpen, setModelOpen] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -112,14 +180,15 @@ export function Chat() {
   const logRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const modelRef = useRef<HTMLDivElement | null>(null);
-  const moreRef = useRef<HTMLDivElement | null>(null);
   const previewBoxRef = useRef<HTMLDivElement | null>(null);
   const ocrBodyRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
   const startRef = useRef<((action: AiAction, cropOverride?: string) => void) | null>(null);
 
-  const busy = activeId !== null || ocr.status === "streaming";
+  const busy =
+    activeId !== null || Object.values(acts).some((a) => a.status === "streaming");
   const canAsk = cropId !== "" && !busy;
+  const act = acts[tab as ActionTab] ?? null;
 
   const appendError = useCallback((text: string) => {
     setMessages((prev) => [
@@ -177,8 +246,8 @@ export function Chat() {
     };
   }, [cropId, appendError, checkConnection, refreshModels]);
 
-  /* Stream listeners, registered once for the life of the window. Extract
-     requests route into the OCR card, everything else into the conversation. */
+  /* Stream listeners. Every stream carries its requestId; it either belongs to
+     one of the per-action tabs or to a 对话 message. */
   useEffect(() => {
     let disposed = false;
     const unlisten: Array<() => void> = [];
@@ -187,12 +256,24 @@ export function Chat() {
         .then((off) => (disposed ? off() : unlisten.push(off)))
         .catch((e: unknown) => appendError(errorText(e)));
 
+    const patchAct = (requestId: string, patch: (prev: ActState) => ActState) => {
+      setActs((prev) => {
+        let touched = false;
+        const next = { ...prev };
+        for (const key of Object.keys(next) as ActionTab[]) {
+          if (next[key].requestId === requestId) {
+            next[key] = patch(next[key]);
+            touched = true;
+          }
+        }
+        return touched ? next : prev;
+      });
+    };
+
     // Append into the stored buffers via functional updates, never stale state.
     const delta = events.onAiDelta(({ requestId, text }) => {
-      setOcr((prev) =>
-        prev.requestId === requestId && prev.status === "streaming"
-          ? { ...prev, text: prev.text + text }
-          : prev,
+      patchAct(requestId, (prev) =>
+        prev.status === "streaming" ? { ...prev, text: prev.text + text } : prev,
       );
       setMessages((prev) => {
         const index = prev.findIndex((m) => m.requestId === requestId && m.streaming);
@@ -203,11 +284,11 @@ export function Chat() {
       });
     });
     const done = events.onAiDone(({ requestId, ok, error }) => {
-      setOcr((prev) =>
-        prev.requestId === requestId && prev.status === "streaming"
+      patchAct(requestId, (prev) =>
+        prev.status === "streaming"
           ? ok
             ? { ...prev, status: "done", requestId: undefined }
-            : { ...prev, status: "error", error: error ?? "识别失败", requestId: undefined }
+            : { ...prev, status: "error", error: error ?? "生成失败", requestId: undefined }
           : prev,
       );
       setMessages((prev) =>
@@ -228,11 +309,10 @@ export function Chat() {
     };
   }, [appendError]);
 
-  /* A new screenshot handed to this window re-binds it without losing the
-     conversation; the recognition card resets since it belongs to the crop.
-     Rust replays the bind ~700ms later so a window that was still loading
-     catches it, and that replay must be a no-op: resetting on it would wipe a
-     recognition stream the first bind had just started. */
+  /* A new screenshot handed to this window re-binds it: every result belongs
+     to the crop, so all tabs reset. Rust replays the bind ~700ms later so a
+     window that was still loading catches it, and that replay must be a no-op:
+     resetting on it would wipe a stream the first bind had just started. */
   const boundCropRef = useRef(initialCrop);
   useEffect(() => {
     let disposed = false;
@@ -247,15 +327,24 @@ export function Chat() {
         // Clear the preview immediately so an old crop is never shown as current.
         setPreview(null);
         setNatural(null);
-        setOcr(IDLE_OCR);
+        setActs(IDLE_ACTS);
+        setMessages([]);
         setEditing(false);
         setZoom("fit");
         api.cropDataUrl(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
-        if (action) {
-          // The toolbar already told us what the user wants; run it right away.
-          window.setTimeout(() => {
-            if (!disposed) startRef.current?.(action, next);
-          }, 60);
+        // "ask" has no preset prompt — it lands on the 对话 tab and waits for
+        // the user's question; the four actions run immediately.
+        if (action === "ask") {
+          setTab("chat");
+        } else {
+          const initial = (action ?? "extract") as ActionTab;
+          setTab(initial);
+          if (action) {
+            // The toolbar already told us what the user wants; run it right away.
+            window.setTimeout(() => {
+              if (!disposed) startRef.current?.(action, next);
+            }, 60);
+          }
         }
       })
       .then((fn) => (disposed ? fn() : (off = fn)))
@@ -290,17 +379,14 @@ export function Chat() {
     return () => window.removeEventListener("resize", syncInputHeight);
   }, [syncInputHeight]);
 
-  /* Follow the stream inside the recognition card: without this the newest
-     tokens land below the fold and the card looks frozen mid-answer. On wide
-     layouts the card grows with its content instead of scrolling, so the outer
-     column has to follow too — but only if the user was already at the bottom. */
+  /* Follow the stream inside the active card: without this the newest tokens
+     land below the fold and the card looks frozen mid-answer. */
   useEffect(() => {
-    if (ocr.status !== "streaming") return;
     const body = ocrBodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
     const log = logRef.current;
     if (log && stickToBottom.current) log.scrollTop = log.scrollHeight;
-  }, [ocr.status, ocr.text]);
+  }, [tab, acts, messages]);
 
   useEffect(() => {
     if (toast === null) return;
@@ -308,17 +394,15 @@ export function Chat() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  /* Dismiss the dropdowns on any click outside them. */
+  /* Dismiss the dropdown on any click outside it. */
   useEffect(() => {
-    if (!modelOpen && !moreOpen) return;
+    if (!modelOpen) return;
     const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (modelOpen && modelRef.current && !modelRef.current.contains(target)) setModelOpen(false);
-      if (moreOpen && moreRef.current && !moreRef.current.contains(target)) setMoreOpen(false);
+      if (modelRef.current && !modelRef.current.contains(e.target as Node)) setModelOpen(false);
     };
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
-  }, [modelOpen, moreOpen]);
+  }, [modelOpen]);
 
   function handleScroll() {
     const el = logRef.current;
@@ -326,50 +410,69 @@ export function Chat() {
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK;
   }
 
+  /** Switching to an action tab that never ran starts it — the tab bar is the
+      trigger, and a second click just shows the cached result again. */
+  function selectTab(next: Tab) {
+    setTab(next);
+    if (next !== "chat" && acts[next].status === "idle" && cropId !== "" && !busy) {
+      start(next);
+    }
+  }
+
   function start(action: AiAction, cropOverride?: string) {
     const targetCrop = cropOverride ?? cropId;
     if (!targetCrop || busy) return;
     const question = input.trim();
-    if (action === "ask" && question === "") return;
+    if (action === "ask") {
+      if (question === "") return;
+      setTab("chat");
+    }
 
     const requestId = crypto.randomUUID();
     const request: AiRequest = { cropId: targetCrop, action };
     if (action === "translate") request.lang = settings?.translateLang || DEFAULT_LANG;
     if (action === "ask") request.question = question;
 
-    setActiveId(requestId);
     setToast(null);
-    if (action === "extract") {
-      setOcr({ status: "streaming", text: "", requestId });
-    } else {
+    if (action === "ask") {
+      setActiveId(requestId);
       const assistant: Message = {
         id: requestId,
         role: "assistant",
         text: "",
         requestId,
-        action,
         streaming: true,
       };
-      setMessages((prev) =>
-        action === "ask"
-          ? [...prev, { id: `user-${requestId}`, role: "user", text: question }, assistant]
-          : [...prev, assistant],
-      );
-      if (action === "ask") setInput("");
+      setMessages((prev) => [
+        ...prev,
+        { id: `user-${requestId}`, role: "user", text: question },
+        assistant,
+      ]);
+      setInput("");
+    } else {
+      const key = action as ActionTab;
+      setActs((prev) => ({
+        ...prev,
+        [key]: { status: "streaming", text: "", requestId },
+      }));
     }
 
     api.aiAsk(request, requestId).catch((e: unknown) => {
       const text = errorText(e);
-      if (action === "extract") {
-        setOcr({ status: "error", text: "", error: text });
-      } else {
+      if (action === "ask") {
         setMessages((prev) =>
           prev.map((m) =>
             m.requestId === requestId ? { ...m, streaming: false, error: m.error ?? text } : m,
           ),
         );
+        setActiveId((prev) => (prev === requestId ? null : prev));
+      } else {
+        const key = action as ActionTab;
+        setActs((prev) => ({
+          ...prev,
+          [key]: { status: "error", text: "", error: text },
+        }));
       }
-      setActiveId((prev) => (prev === requestId ? null : prev));
     });
   }
 
@@ -410,7 +513,6 @@ export function Chat() {
 
   function openSettings() {
     setModelOpen(false);
-    setMoreOpen(false);
     api.openSettings().catch((e: unknown) => appendError(errorText(e)));
   }
 
@@ -444,88 +546,67 @@ export function Chat() {
   }
 
   function beginEdit() {
-    setEditDraft(ocr.text);
+    setEditDraft(acts.extract.text);
     setEditing(true);
   }
 
   function saveEdit() {
     const draft = editDraft.trim();
-    if (draft !== "") setOcr((prev) => ({ ...prev, text: editDraft }));
+    if (draft !== "") setActs((prev) => ({ ...prev, extract: { ...prev.extract, text: editDraft } }));
     setEditing(false);
   }
 
-  function clearLog() {
+  function clearAll() {
     setMessages([]);
+    setActs(IDLE_ACTS);
+    setEditing(false);
     setToast(null);
     stickToBottom.current = true;
   }
 
   const zoomLabel = zoom === "fit" ? "适应" : `${Math.round(zoom * 100)}%`;
+  const actDone = act !== null && act.status === "done" && act.text !== "";
+  const hasContent = messages.length > 0 || Object.values(acts).some((a) => a.text !== "");
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-surface text-[13px] color-ink">
-      {/* AI toolbar: primary extract + secondary actions, model, connection, capture ops */}
-      <header className="flex flex-none items-center gap-2 border-b border-line px-4 py-3">
-        <button
-          className="ai-btn-primary"
-          disabled={!canAsk}
-          onClick={() => start("extract")}
-        >
-          提取文字
-        </button>
-        {ACTIONS.map(({ action, label }) => (
+      {/* Row 1: action tabs (switch results, first click runs), then model/status ops */}
+      <header className="flex flex-none items-center gap-2 border-b border-line px-4 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          {ACTION_TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              className={
+                tab === id
+                  ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500/10 px-3 text-[13px] font-500 color-primary-600 transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
+                  : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
+              }
+              disabled={cropId === ""}
+              onClick={() => selectTab(id)}
+            >
+              {label}
+              {acts[id].status === "streaming" && (
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+              )}
+            </button>
+          ))}
           <button
-            key={action}
-            className="ai-btn max-[639px]:hidden"
-            disabled={!canAsk}
-            onClick={() => start(action)}
+            className={
+              tab === "chat"
+                ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500/10 px-3 text-[13px] font-500 color-primary-600 transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
+                : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
+            }
+            onClick={() => setTab("chat")}
           >
-            {label}
+            对话
+            {activeId !== null && (
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+            )}
           </button>
-        ))}
-        {/* Narrow windows fold the secondary actions (and 清空) into this menu. */}
-        <div ref={moreRef} className="relative min-[640px]:hidden">
-          <button
-            className="ai-btn w-9 justify-center px-0"
-            disabled={!canAsk && messages.length === 0}
-            aria-label="更多操作"
-            onClick={() => setMoreOpen((v) => !v)}
-          >
-            ⋯
-          </button>
-          {moreOpen && (
-            <div className="absolute left-0 top-full z-dropdown mt-1.5 w-36 rounded-lg border border-line bg-surface py-1 shadow-lg">
-              {ACTIONS.map(({ action, label }) => (
-                <button
-                  key={action}
-                  className="block w-full px-3 py-1.5 text-left transition hover:bg-surface-alt disabled:op-40"
-                  disabled={!canAsk}
-                  onClick={() => {
-                    setMoreOpen(false);
-                    start(action);
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-              <button
-                className="block w-full border-t border-line px-3 py-1.5 text-left transition hover:bg-surface-alt disabled:op-40"
-                disabled={messages.length === 0}
-                onClick={() => {
-                  setMoreOpen(false);
-                  setConfirmClear(true);
-                }}
-              >
-                清空对话
-              </button>
-            </div>
-          )}
         </div>
 
-        <span className="flex-1" />
-
         {/* Model selector; without a base URL it just opens settings. */}
-        <div ref={modelRef} className="relative min-w-0">
+        <div ref={modelRef} className="relative min-w-0 flex-none">
           <button
             className="ai-btn min-w-0 max-w-[180px] max-[559px]:max-w-[110px]"
             disabled={settings === null}
@@ -595,11 +676,20 @@ export function Chat() {
           <CaptureIcon />
         </button>
         <button
-          className="h-9 flex-none rounded-lg px-2.5 transition hover:bg-surface-alt hover:color-ink disabled:pointer-events-none disabled:op-40 max-[639px]:hidden"
-          disabled={messages.length === 0}
+          className="ai-iconbtn"
+          title="清空识别结果与对话"
+          disabled={!hasContent}
           onClick={() => setConfirmClear(true)}
         >
-          清空
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M2.5 4.5h11M6.5 2.5h3M5 4.5l.6 8a1.5 1.5 0 0 0 1.5 1.4h1.8a1.5 1.5 0 0 0 1.5-1.4l.6-8"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
       </header>
 
@@ -617,155 +707,221 @@ export function Chat() {
             </button>
           </div>
         ) : (
-          <>
-            <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-stretch">
-              {/* Current screenshot: preview, zoom, copy, save */}
-              <section className="ai-card min-[900px]:flex-1">
-                <header className="ai-card-head">
-                  <span className="ai-card-title">截图</span>
-                  {natural !== null && (
-                    <span className="text-mini tabular-nums color-ink-dim">
-                      {natural.w} × {natural.h}
-                    </span>
+          <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-stretch">
+            {/* Current screenshot: preview, zoom, copy, save */}
+            <section className="ai-card min-[900px]:flex-1">
+              <header className="ai-card-head">
+                <span className="ai-card-title">截图</span>
+                {natural !== null && (
+                  <span className="text-mini tabular-nums color-ink-dim">
+                    {natural.w} × {natural.h}
+                  </span>
+                )}
+                <span className="flex-1" />
+                <button className="ai-headbtn" disabled={preview === null} onClick={copyImage}>
+                  复制
+                </button>
+                <button className="ai-headbtn" onClick={saveImage}>
+                  保存
+                </button>
+              </header>
+              {/* `flex-1` from 900px up: the two cards are stretched to the
+                  same height there, and a fixed 320px preview would leave a
+                  bare grey band under a taller result card. */}
+              <div className="relative h-[240px] flex-1 min-h-[240px] bg-surface-alt min-[900px]:min-h-[320px]">
+                {/* Scroller is its own layer so the zoom pill can stay pinned
+                    to the card instead of scrolling away with the image.
+                    `safe center` keeps the image centred while it fits and
+                    pins it to the start edge once it overflows — plain
+                    centring would push both edges out of scroll range. */}
+                <div
+                  ref={previewBoxRef}
+                  className="flex h-full overflow-auto"
+                  style={{ justifyContent: "safe center", alignItems: "safe center" }}
+                >
+                  {preview !== null ? (
+                    <img
+                      src={preview}
+                      alt="当前截图"
+                      draggable={false}
+                      className={
+                        zoom === "fit"
+                          ? "max-h-full max-w-full object-contain"
+                          : "max-w-none shrink-0"
+                      }
+                      style={
+                        zoom === "fit" || natural === null
+                          ? undefined
+                          : { width: natural.w * zoom }
+                      }
+                      onLoad={(e) =>
+                        setNatural({
+                          w: e.currentTarget.naturalWidth,
+                          h: e.currentTarget.naturalHeight,
+                        })
+                      }
+                    />
+                  ) : (
+                    <span className="color-ink-dim">加载中…</span>
                   )}
-                  <span className="flex-1" />
-                  <button className="ai-headbtn" disabled={preview === null} onClick={copyImage}>
-                    复制
-                  </button>
-                  <button className="ai-headbtn" onClick={saveImage}>
-                    保存
-                  </button>
-                </header>
-                {/* `flex-1` from 900px up: the two cards are stretched to the
-                    same height there, and a fixed 320px preview would leave a
-                    bare grey band under a taller recognition card. */}
-                <div className="relative h-[240px] flex-1 min-h-[240px] bg-surface-alt min-[900px]:min-h-[320px]">
-                  {/* Scroller is its own layer so the zoom pill can stay pinned
-                      to the card instead of scrolling away with the image.
-                      `safe center` keeps the image centred while it fits and
-                      pins it to the start edge once it overflows — plain
-                      centring would push both edges out of scroll range. */}
-                  <div
-                    ref={previewBoxRef}
-                    className="flex h-full overflow-auto"
-                    style={{ justifyContent: "safe center", alignItems: "safe center" }}
-                  >
-                    {preview !== null ? (
-                      <img
-                        src={preview}
-                        alt="当前截图"
-                        draggable={false}
-                        className={
-                          zoom === "fit"
-                            ? "max-h-full max-w-full object-contain"
-                            : "max-w-none shrink-0"
-                        }
-                        style={
-                          zoom === "fit" || natural === null
-                            ? undefined
-                            : { width: natural.w * zoom }
-                        }
-                        onLoad={(e) =>
-                          setNatural({
-                            w: e.currentTarget.naturalWidth,
-                            h: e.currentTarget.naturalHeight,
-                          })
-                        }
-                      />
-                    ) : (
-                      <span className="color-ink-dim">加载中…</span>
-                    )}
-                  </div>
-                  <div className="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full border border-line bg-surface/92 p-0.5 shadow-sm backdrop-blur-2">
-                    <button className="ai-headbtn" title="缩小" onClick={() => zoomBy(-1)}>
-                      −
-                    </button>
-                    <button
-                      className="ai-headbtn min-w-11 justify-center tabular-nums"
-                      title={zoom === "fit" ? "适应窗口，点击切换为 100%" : "点击适应窗口"}
-                      onClick={() => setZoom((z) => (z === "fit" ? 1 : "fit"))}
-                    >
-                      {zoomLabel}
-                    </button>
-                    <button className="ai-headbtn" title="放大" onClick={() => zoomBy(1)}>
-                      ＋
-                    </button>
-                  </div>
                 </div>
-              </section>
+                <div className="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full border border-line bg-surface/92 p-0.5 shadow-sm backdrop-blur-2">
+                  <button className="ai-headbtn" title="缩小" onClick={() => zoomBy(-1)}>
+                    −
+                  </button>
+                  <button
+                    className="ai-headbtn min-w-11 justify-center tabular-nums"
+                    title={zoom === "fit" ? "适应窗口，点击切换为 100%" : "点击适应窗口"}
+                    onClick={() => setZoom((z) => (z === "fit" ? 1 : "fit"))}
+                  >
+                    {zoomLabel}
+                  </button>
+                  <button className="ai-headbtn" title="放大" onClick={() => zoomBy(1)}>
+                    ＋
+                  </button>
+                </div>
+              </div>
+            </section>
 
-              {/* Recognition result: extract lands here, not in the conversation */}
-              <section className="ai-card min-[900px]:flex-1">
-                <header className="ai-card-head">
-                  <span className="ai-card-title">识别结果</span>
-                  {ocr.status === "streaming" && (
-                    <span className="text-mini color-ink-dim">识别中…</span>
-                  )}
-                  <span className="flex-1" />
-                  <button
-                    className="ai-headbtn"
-                    disabled={busy || editing}
-                    onClick={() => start("extract")}
-                  >
-                    重新识别
-                  </button>
-                  {ocr.status === "done" && ocr.text !== "" && (
-                    editing ? (
-                      <button className="ai-headbtn color-ink" onClick={saveEdit}>
-                        完成
+            {/* Result card: content follows the active tab */}
+            <section className="ai-card min-[900px]:flex-1">
+              <header className="ai-card-head">
+                <span className="ai-card-title">{TAB_LABEL[tab]}</span>
+                {tab !== "chat" && act?.status === "streaming" && (
+                  <span className="text-mini color-ink-dim">生成中…</span>
+                )}
+                <span className="flex-1" />
+                {tab !== "chat" && act && (
+                  <>
+                    {actDone && (
+                      <button
+                        className="ai-iconbtn h-7 w-7"
+                        title="复制结果"
+                        onClick={() => copy(act.text)}
+                      >
+                        <CopyIcon />
                       </button>
-                    ) : (
-                      <button className="ai-headbtn" onClick={beginEdit}>
-                        编辑
-                      </button>
-                    )
+                    )}
+                    {tab === "extract" && actDone && (
+                      editing ? (
+                        <button className="ai-headbtn color-ink" onClick={saveEdit}>
+                          完成
+                        </button>
+                      ) : (
+                        <button className="ai-iconbtn h-7 w-7" title="编辑结果" onClick={beginEdit}>
+                          <EditIcon />
+                        </button>
+                      )
+                    )}
+                    <button
+                      className="ai-iconbtn h-7 w-7"
+                      title={tab === "extract" ? "重新识别" : `重新${TAB_LABEL[tab]}`}
+                      disabled={busy || editing}
+                      onClick={() => start(tab)}
+                    >
+                      <RerunIcon />
+                    </button>
+                  </>
+                )}
+              </header>
+
+              {tab === "chat" ? (
+                <div className="min-h-[140px] flex-1 px-3.5 py-3">
+                  {messages.length === 0 ? (
+                    <div className="flex h-full min-h-[120px] flex-col items-center justify-center gap-1.5 text-center">
+                      <div className="color-ink-dim">向 AI 提问</div>
+                      <div className="text-mini color-faint">
+                        针对当前截图自由提问，Enter 发送
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2.5">
+                      {messages.map((message) => {
+                        const canCopy =
+                          message.role === "assistant" &&
+                          !message.streaming &&
+                          message.error === undefined &&
+                          message.text !== "";
+                        return (
+                          <div
+                            key={message.id}
+                            className={`group relative max-w-[88%] whitespace-pre-wrap break-words leading-6 select-text ${
+                              message.role === "user"
+                                ? "self-end rounded-xl border border-primary-500/25 bg-primary-500/8 px-3 py-2"
+                                : "self-start pr-6"
+                            }`}
+                          >
+                            {message.text === "" && message.streaming ? (
+                              <span className="inline-flex items-center gap-2 color-faint">
+                                <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+                                思考中…
+                              </span>
+                            ) : (
+                              <div>{message.text}</div>
+                            )}
+                            {message.error !== undefined && (
+                              <div className="text-error-600">{message.error}</div>
+                            )}
+                            {canCopy && (
+                              <button
+                                className="ai-iconbtn h-6 w-6 absolute right-0 top-0 opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
+                                title="复制"
+                                onClick={() => copy(message.text)}
+                              >
+                                <CopyIcon />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
-                  <button
-                    className="ai-headbtn"
-                    disabled={ocr.status !== "done" || ocr.text === "" || editing}
-                    onClick={() => copy(ocr.text)}
-                  >
-                    复制
-                  </button>
-                </header>
+                </div>
+              ) : (
                 <div
                   ref={ocrBodyRef}
                   className="min-h-[140px] flex-1 overflow-y-auto px-3.5 py-3 max-[899px]:max-h-[300px]"
                 >
-                  {ocr.status === "idle" && (
+                  {act?.status === "idle" && (
                     <div className="flex h-full min-h-[120px] flex-col items-center justify-center gap-1.5 text-center">
-                      <div className="color-ink-dim">尚未识别文字</div>
-                      <div className="text-mini color-faint">提取截图中的全部文字，结果可编辑</div>
+                      <div className="color-ink-dim">
+                        {tab === "extract" ? "尚未识别文字" : `点击上方「${TAB_LABEL[tab]}」开始`}
+                      </div>
+                      <div className="text-mini color-faint">
+                        {tab === "extract"
+                          ? "提取截图中的全部文字，结果可编辑"
+                          : "结果会保留在这里，可随时切换查看"}
+                      </div>
                       <button
                         className="ai-btn-primary mt-1.5"
                         disabled={busy}
-                        onClick={() => start("extract")}
+                        onClick={() => start(tab)}
                       >
-                        提取文字
+                        {TAB_LABEL[tab]}
                       </button>
                     </div>
                   )}
-                  {ocr.status === "streaming" && (
+                  {act?.status === "streaming" && (
                     <div className="whitespace-pre-wrap break-words leading-6 select-text">
-                      {ocr.text === "" ? (
+                      {act.text === "" ? (
                         <span className="inline-flex items-center gap-2 color-ink-dim">
                           <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse" />
-                          正在识别…
+                          正在生成…
                         </span>
                       ) : (
                         <>
-                          {ocr.text}
+                          {act.text}
                           <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 bg-primary-500 motion-safe:animate-pulse" />
                         </>
                       )}
                     </div>
                   )}
-                  {ocr.status === "done" && !editing && (
-                    ocr.text === "" ? (
-                      <div className="color-faint">未识别到文字</div>
+                  {act?.status === "done" && !editing && (
+                    act.text === "" ? (
+                      <div className="color-faint">没有生成内容</div>
                     ) : (
                       <div className="whitespace-pre-wrap break-words leading-6 select-text">
-                        {ocr.text}
+                        {act.text}
                       </div>
                     )
                   )}
@@ -787,14 +943,14 @@ export function Chat() {
                       }}
                     />
                   )}
-                  {ocr.status === "error" && (
+                  {act?.status === "error" && (
                     <div className="flex flex-col items-start gap-2">
-                      <div className="break-all text-error-600">{ocr.error ?? "识别失败"}</div>
+                      <div className="break-all text-error-600">{act.error ?? "生成失败"}</div>
                       <div className="flex gap-2">
                         <button
                           className="ai-btn h-8"
                           disabled={busy}
-                          onClick={() => start("extract")}
+                          onClick={() => start(tab)}
                         >
                           重试
                         </button>
@@ -805,71 +961,9 @@ export function Chat() {
                     </div>
                   )}
                 </div>
-              </section>
-            </div>
-
-            {/* Conversation: translate / explain / reply / ask */}
-            {messages.length > 0 && (
-              <section className="flex flex-col gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-mini color-ink-dim">对话</span>
-                  <span className="h-px flex-1 bg-line" />
-                </div>
-                {messages.map((message) => {
-                  const label = ACTIONS.find((a) => a.action === message.action)?.label;
-                  const canAct =
-                    message.role === "assistant" &&
-                    !message.streaming &&
-                    message.error === undefined &&
-                    message.text !== "";
-                  return (
-                    <div
-                      key={message.id}
-                      className={`max-w-[88%] whitespace-pre-wrap break-words leading-6 select-text ${
-                        message.role === "user"
-                          ? "self-end rounded-xl border border-primary-500/25 bg-primary-500/8 px-3 py-2"
-                          : "self-start"
-                      }`}
-                    >
-                      {label !== undefined && (
-                        <div className="mb-1 text-mini color-faint">{label}</div>
-                      )}
-                      {message.text === "" && message.streaming ? (
-                        <span className="color-faint">…</span>
-                      ) : (
-                        <div>{message.text}</div>
-                      )}
-                      {message.error !== undefined && (
-                        <>
-                          <div className="text-error-600">{message.error}</div>
-                          <div className="mt-1.5 flex gap-2">
-                            <button className="ai-headbtn border border-line" onClick={openSettings}>
-                              去设置
-                            </button>
-                          </div>
-                        </>
-                      )}
-                      {canAct && (
-                        <div className="mt-1.5 flex gap-1">
-                          <button
-                            className="ai-headbtn border border-line"
-                            onClick={() => copy(message.text)}
-                          >
-                            复制
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </section>
-            )}
-            {messages.length === 0 && (
-              <div className="m-auto text-center leading-7 color-faint">
-                选择上方动作，或直接在下方提问。
-              </div>
-            )}
-          </>
+              )}
+            </section>
+          </div>
         )}
       </div>
 
@@ -905,13 +999,13 @@ export function Chat() {
 
       {confirmClear && (
         <Confirm
-          title="清空对话"
-          message="将删除当前窗口中的全部对话记录，识别结果保留。此操作无法撤销。"
+          title="清空结果与对话"
+          message="将删除当前窗口中全部动作结果与对话记录。此操作无法撤销。"
           confirmLabel="清空"
           danger
           onConfirm={() => {
             setConfirmClear(false);
-            clearLog();
+            clearAll();
           }}
           onCancel={() => setConfirmClear(false)}
         />

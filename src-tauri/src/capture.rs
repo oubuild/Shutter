@@ -1,6 +1,6 @@
 //! Screen enumeration and raw frame capture.
 
-use crate::types::MonitorInfo;
+use crate::types::{MonitorInfo, WindowInfo};
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use xcap::Monitor;
@@ -74,6 +74,118 @@ pub fn capture_all() -> Result<(Vec<MonitorInfo>, Vec<(u32, RgbaImage)>)> {
     }
     let monitors = displays.into_iter().map(|d| d.info).collect();
     Ok((monitors, frames))
+}
+
+/// On-screen standard-layer windows, front-to-back, for hover-to-select.
+///
+/// Only normal app windows (`kCGWindowLayer == 0`) of other processes are
+/// listed; menus, the Dock and the overlay's own windows stay out. Window
+/// titles need Screen Recording permission, which capture already requires —
+/// without it the `title` field is simply empty and the chip shows the owner.
+#[cfg(target_os = "macos")]
+pub fn list_windows() -> Result<Vec<WindowInfo>> {
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    // Raw CGWindowListCopyWindowInfo: core-graphics declares the function but
+    // not the option constants, and those are stable ABI values.
+    const OPTION_ON_SCREEN_ONLY: u32 = 1;
+    const OPTION_EXCLUDE_DESKTOP_ELEMENTS: u32 = 4;
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const std::ffi::c_void;
+    }
+
+    type Dict = CFDictionary<CFString, CFType>;
+
+    let mut out = Vec::new();
+    let pid = std::process::id() as i32;
+
+    // The result is owned (Copy), so wrap_under_create_rule is correct.
+    let array = unsafe {
+        let ptr = CGWindowListCopyWindowInfo(
+            OPTION_ON_SCREEN_ONLY | OPTION_EXCLUDE_DESKTOP_ELEMENTS,
+            0, // kCGNullWindowID
+        );
+        if ptr.is_null() {
+            return Ok(out);
+        }
+        CFArray::<Dict>::wrap_under_create_rule(ptr.cast())
+    };
+
+    for window in array.iter() {
+        let window: &Dict = &window;
+        let number = |dict: &Dict, key: &str| -> Option<CFNumber> {
+            dict.find(CFString::new(key))
+                .and_then(|v| v.clone().downcast_into::<CFNumber>())
+        };
+        let string = |dict: &Dict, key: &str| -> String {
+            dict.find(CFString::new(key))
+                .and_then(|v| v.clone().downcast_into::<CFString>())
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+
+        // Layer 0 = normal windows; menus (24), Dock (20), overlays (101+) out.
+        if number(window, "kCGWindowLayer").and_then(|n| n.to_i32()) != Some(0) {
+            continue;
+        }
+        // Skip our own overlay/frame windows.
+        if number(window, "kCGWindowOwnerPID").and_then(|n| n.to_i32()) == Some(pid) {
+            continue;
+        }
+
+        // The bounds sub-dictionary is only known to the runtime as a CFType;
+        // borrow it as the dictionary it is (get-rule: no extra retain, the
+        // parent window dict keeps it alive for the whole loop body).
+        let bounds: Dict = match window.find(CFString::new("kCGWindowBounds")) {
+            Some(v) => unsafe {
+                let raw = v.as_CFTypeRef();
+                if raw.is_null() {
+                    continue;
+                }
+                CFDictionary::<CFString, CFType>::wrap_under_get_rule(raw.cast())
+            },
+            None => continue,
+        };
+        let coord = |k: &str| -> f64 {
+            bounds
+                .find(CFString::new(k))
+                .and_then(|v| v.clone().downcast_into::<CFNumber>())
+                .and_then(|n| n.to_f64())
+                .unwrap_or(0.0)
+        };
+        let (x, y) = (coord("X"), coord("Y"));
+        let (w, h) = (coord("Width"), coord("Height"));
+        // Cursor-sized tray leftovers and 1px helpers are noise for selection.
+        if w < 50.0 || h < 50.0 {
+            continue;
+        }
+
+        out.push(WindowInfo {
+            id: out.len() as u64,
+            x,
+            y,
+            width: w,
+            height: h,
+            owner: string(window, "kCGWindowOwnerName"),
+            title: string(window, "kCGWindowName"),
+        });
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Non-macOS: window auto-detection is not wired yet; the overlay degrades to
+/// free-hand selection and no highlight is shown.
+#[cfg(not(target_os = "macos"))]
+pub fn list_windows() -> Result<Vec<WindowInfo>> {
+    Ok(Vec::new())
 }
 
 #[cfg(test)]

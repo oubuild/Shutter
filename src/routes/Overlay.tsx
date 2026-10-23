@@ -28,12 +28,13 @@ import {
 } from "../canvas/model";
 import {
   api,
-  events,
   errorText,
+  events,
   type AiAction,
   type CaptureAction,
   type MonitorInfo,
   type ScrollPreview,
+  type WindowInfo,
 } from "../lib/ipc";
 import {
   MIN_SELECTION,
@@ -59,6 +60,17 @@ type Drag =
 /** Inline text editor: `id` is set when re-editing an existing text shape. */
 type TextEdit = { at: Point; value: string; id?: string; style?: ToolStyle };
 
+/** A detected window mapped into this monitor's local coordinates. */
+type WinBox = {
+  id: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  owner: string;
+  title: string;
+};
+
 /** Opacity step for the wheel, mirroring the reference `I@394891`. */
 const WHEEL_OPACITY_STEP = 0.1;
 
@@ -78,6 +90,14 @@ export function Overlay({ monitorId }: Props) {
   const [menu, setMenu] = useState<Point | null>(null);
   /** Inline text editor: open at the click point while the text tool is used. */
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
+
+  /* ------------------------------------------- window detect + shape select */
+  /** On-screen windows mapped into this monitor's local points (front-to-back). */
+  const [winBoxes, setWinBoxes] = useState<WinBox[]>([]);
+  /** The window highlighted under the cursor, before any selection exists. */
+  const [hoverWin, setHoverWin] = useState<WinBox | null>(null);
+  /** The committed annotation the user last grabbed; Delete removes it. */
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   /* ------------------------------------------------------- scroll capture */
   /** Long-screenshot session state; null = normal capture mode. */
@@ -229,6 +249,46 @@ export function Overlay({ monitorId }: Props) {
     ? { w: monitor.width, h: monitor.height }
     : { w: size.w, h: size.h };
 
+  /* On-screen windows for hover-to-select, mapped into this monitor's local
+     points. Global → local is a pure subtraction (both are logical points in
+     the same display space); windows that miss this monitor drop out. */
+  useEffect(() => {
+    if (!monitor) return;
+    let cancelled = false;
+    const local = (list: WindowInfo[]): WinBox[] =>
+      list
+        .map((w) => {
+          const x = Math.max(w.x - monitor.x, 0);
+          const y = Math.max(w.y - monitor.y, 0);
+          const width = Math.min(w.x - monitor.x + w.width, monitor.width) - x;
+          const height = Math.min(w.y - monitor.y + w.height, monitor.height) - y;
+          return { id: w.id, x, y, width, height, owner: w.owner, title: w.title };
+        })
+        .filter((b) => b.width >= 60 && b.height >= 40);
+    api
+      .listWindows()
+      .then((list) => {
+        if (!cancelled) setWinBoxes(local(list));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [monitor]);
+
+  /** Topmost detected window under the point, if any. */
+  const hitWin = useCallback(
+    (p: Point): WinBox | null => {
+      for (const b of winBoxes) {
+        if (p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
+          return b;
+        }
+      }
+      return null;
+    },
+    [winBoxes],
+  );
+
   // Debug affordance: `?debug=box` preselects a centred region so the toolbar
   // can be exercised without a mouse (used by automation).
   const debugBox = new URLSearchParams(window.location.search).has("debug");
@@ -272,15 +332,20 @@ export function Overlay({ monitorId }: Props) {
         const handle = hitHandle(box, p);
         if (handle && handle !== "move") {
           drag.current = { mode: "resize", handle, origin: box };
+          setSelectedId(null);
           return;
         }
         const hit = hitShape(shapes, p);
         if (hit) {
           drag.current = { mode: "shape", id: hit.id, grab: p, origin: hit };
+          // Grabbing a shape selects it: the dashed outline says "draggable",
+          // and Delete/Backspace now removes exactly this one.
+          setSelectedId(hit.id);
           return;
         }
         if (handle === "move") {
           drag.current = { mode: "move", grab: p, origin: box };
+          setSelectedId(null);
           return;
         }
       }
@@ -289,6 +354,8 @@ export function Overlay({ monitorId }: Props) {
         drag.current = { mode: "select", start: p };
         setBox({ x: p.x, y: p.y, width: 0, height: 0 });
         setShapes([]);
+        setSelectedId(null);
+        setHoverWin(null);
         return;
       }
 
@@ -317,6 +384,7 @@ export function Overlay({ monitorId }: Props) {
         // new one on top; its own font size and colour win while editing.
         const existing = textShapeAt(shapes, p);
         if (existing) {
+          setSelectedId(null);
           setTextEdit({
             at: existing.at,
             value: existing.text,
@@ -372,6 +440,18 @@ export function Overlay({ monitorId }: Props) {
         setCursor(PICKER_CURSOR);
         return;
       }
+      if (tool === "select" && !box) {
+        // Before any selection the cursor is a live inspect surface, like the
+        // reference tool's default state: the window under the cursor is
+        // outlined (click selects it whole) and the loupe samples the pixel
+        // (取色 without switching tools).
+        setHoverWin(hitWin(p));
+        const seen = sampleAt(p);
+        setPicker(seen ? { x: p.x, y: p.y, ...seen } : null);
+        setCursor("crosshair");
+        return;
+      }
+      setHoverWin(null);
       if (box && tool === "select") {
         // A committed shape under the cursor drags it (the reference's
         // "select and move"); only empty space moves/resizes the crop.
@@ -385,6 +465,10 @@ export function Overlay({ monitorId }: Props) {
       }
       return;
     }
+
+    // Any active drag hides the window highlight and the loupe.
+    setHoverWin(null);
+    setPicker(null);
 
     switch (d.mode) {
       case "select":
@@ -426,7 +510,7 @@ export function Overlay({ monitorId }: Props) {
         break;
       }
     }
-  }, [box, draft, pos, shapes, stageSize.h, stageSize.w, tool]);
+  }, [box, draft, hitWin, pos, shapes, stageSize.h, stageSize.w, tool]);
 
   // Diagnostic: the eyedropper UI vanished right after being selected, so record
   // every tool transition together with the selection state that gates the
@@ -435,10 +519,13 @@ export function Overlay({ monitorId }: Props) {
     void reportDebug("tool-change", { tool, box: box ? `${box.width}x${box.height}` : null });
   }, [tool, box]);
 
-  // The loupe only exists while the eyedropper is active.
+  // The loupe is a pre-selection affordance: it follows the cursor with the
+  // eyedropper tool, and in select mode only until a box exists. This effect
+  // is the cleanup for every other combination (tool switch, box drawn).
   useEffect(() => {
-    if (tool !== "picker") setPicker(null);
-  }, [tool]);
+    if (tool === "picker") return;
+    setPicker(null);
+  }, [tool, box]);
 
   // Paint the magnifier: a 15x15 pixel window from the frozen frame, drawn
   // nearest-neighbour so every source pixel is a crisp square, with the picked
@@ -446,7 +533,9 @@ export function Overlay({ monitorId }: Props) {
   // inner width (15*9=135): a non-integer upscale left edge rows unpainted,
   // and a canvas narrower than the panel left a dead strip beside it.
   useEffect(() => {
-    if (!picker || tool !== "picker") return;
+    // Hover mode: select tool before any selection. Tool mode: the picker.
+    const loupeVisible = picker !== null && (tool === "picker" || (tool === "select" && !box));
+    if (!loupeVisible) return;
     const canvas = pickerCanvasRef.current;
     const sample = sampleRef.current;
     if (!canvas || !sample || !monitor) return;
@@ -481,7 +570,7 @@ export function Overlay({ monitorId }: Props) {
     ctx.strokeRect(offset - 0.5, offset - 0.5, cell + 1, cell + 1);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
     ctx.strokeRect(offset + 0.5, offset + 0.5, cell - 1, cell - 1);
-  }, [picker, tool, monitor]);
+  }, [picker, tool, box, monitor]);
 
   const onMouseUp = useCallback(() => {
     const d = drag.current;
@@ -489,7 +578,29 @@ export function Overlay({ monitorId }: Props) {
     if (!d) return;
 
     if (d.mode === "select") {
-      if (box && !isUsableSelection(box)) setBox(null);
+      if (box && !isUsableSelection(box)) {
+        // A click on a detected window selects it whole — the reference
+        // tool's default gesture, and the reason window detection exists.
+        // Only a genuine click counts: a real (if tiny) drag still means
+        // "I started drawing a box", so it just cancels.
+        const p = pos();
+        const moved = Math.hypot(p.x - d.start.x, p.y - d.start.y);
+        const w = moved <= 6 ? hitWin(p) : null;
+        if (w && w.width >= MIN_SELECTION && w.height >= MIN_SELECTION) {
+          setBox(
+            clampBox(
+              { x: w.x, y: w.y, width: w.width, height: w.height },
+              stageSize.w,
+              stageSize.h,
+              MIN_SELECTION,
+            ),
+          );
+          setHoverWin(null);
+          setPicker(null);
+        } else {
+          setBox(null);
+        }
+      }
       return;
     }
     if (d.mode === "draw" && draft) {
@@ -503,7 +614,7 @@ export function Overlay({ monitorId }: Props) {
       }
       setDraft(null);
     }
-  }, [box, draft, patchStyle]);
+  }, [box, draft, hitWin, pos, patchStyle, stageSize.h, stageSize.w]);
 
   /** Re-open a committed text shape for editing (reference: editable text). */
   const onDblClick = useCallback(() => {
@@ -513,6 +624,7 @@ export function Overlay({ monitorId }: Props) {
     // trigger a copy, or the caret would land on a destroyed webview.
     const hit = textShapeAt(shapes, p);
     if (hit) {
+      setSelectedId(null);
       setTextEdit({
         at: hit.at,
         value: hit.text,
@@ -647,8 +759,12 @@ export function Overlay({ monitorId }: Props) {
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        // Leave the eyedropper first; a second Esc cancels the capture.
-        // Without this, exiting the picker also threw away the selection.
+        // Deselect first, then leave the eyedropper, then cancel: each Esc
+        // peels one layer instead of throwing the whole capture away.
+        if (selectedId) {
+          setSelectedId(null);
+          return;
+        }
         if (tool === "picker") {
           setTool("select");
           return;
@@ -659,6 +775,12 @@ export function Overlay({ monitorId }: Props) {
         void cancel();
         return;
       }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedId && !busy) {
+        e.preventDefault();
+        setShapes((prev) => prev.filter((s) => s.id !== selectedId));
+        setSelectedId(null);
+        return;
+      }
       if (e.key === "Enter" && box && !busy) {
         e.preventDefault();
         void confirm("copy");
@@ -667,6 +789,9 @@ export function Overlay({ monitorId }: Props) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         setShapes((prev) => prev.slice(0, -1));
+        // The popped shape may be the selected one; a dangling id would draw
+        // an outline around nothing.
+        setSelectedId(null);
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
@@ -739,7 +864,7 @@ export function Overlay({ monitorId }: Props) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [box, busy, monitor, picker, pickerFmt, scrollMode, shapes, tool]);
+  }, [box, busy, monitor, picker, pickerFmt, scrollMode, selectedId, shapes, tool]);
 
   /* --------------------------------------------------------------- shapes */
 
@@ -870,13 +995,15 @@ export function Overlay({ monitorId }: Props) {
           ? prev.map((s) => (s.id === edit.id && s.kind === "text" ? { ...s, text: value } : s))
           : prev.filter((s) => s.id !== edit.id),
       );
+      if (!value) setSelectedId(null);
       return;
     }
     if (!value) return;
+    const id = nextId();
     setShapes((prev) => [
       ...prev,
       {
-        id: nextId(),
+        id,
         color: style.color,
         kind: "text",
         at: edit.at,
@@ -884,8 +1011,12 @@ export function Overlay({ monitorId }: Props) {
         fontSize: textSizeOf(style),
       },
     ]);
-    // The next badge follows the number just used (reference increments on
-    // creation), so a run of badges is 1, 2, 3… without the user re-entering it.
+    // Committed text lands in the select tool with the shape selected:
+    // dragging moves it, Delete removes it, double-click edits it again.
+    // Staying in the text tool made all three undiscoverable — a drag just
+    // re-opened the editor and no delete path existed at all.
+    setTool("select");
+    setSelectedId(id);
   };
 
   // Focus lands in a rAF after mount: the mousedown default action (focusing
@@ -1274,6 +1405,8 @@ export function Overlay({ monitorId }: Props) {
     setShapes([]);
     setDraft(null);
     setMenu(null);
+    setSelectedId(null);
+    setHoverWin(null);
   };
 
   /* ----------------------------------------------------------------- view */
@@ -1287,6 +1420,11 @@ export function Overlay({ monitorId }: Props) {
   // through the (Rust-side click-through) window; only the reference-style
   // hint, the live preview thumbnail and transient tips remain.
   const inScroll = scrollMode !== null;
+
+  // Bounds of the grabbed annotation, for the dashed outline (null = none).
+  const selectedShape =
+    selectedId !== null ? shapes.find((s) => s.id === selectedId) ?? null : null;
+  const selectedOutline = selectedShape ? shapeBounds(selectedShape) : null;
 
   return (
     <div className="overlay-root" style={{ cursor }} onContextMenu={(e) => e.preventDefault()}>
@@ -1345,6 +1483,37 @@ export function Overlay({ monitorId }: Props) {
         }
       />
       )}
+      {!inScroll && !box && tool === "select" && !drag.current && hoverWin && (
+        <div
+          className="overlay-win-hint"
+          style={{
+            left: hoverWin.x,
+            top: hoverWin.y,
+            width: hoverWin.width,
+            height: hoverWin.height,
+          }}
+        >
+          <span className="overlay-win-label">
+            {hoverWin.owner || "窗口"}
+            {hoverWin.title ? ` · ${hoverWin.title}` : ""}
+          </span>
+        </div>
+      )}
+
+      {/* Selection outline around the grabbed annotation: drag moves it,
+          Delete removes it, double-click re-edits text. */}
+      {!inScroll && selectedOutline && (
+        <div
+          className="overlay-shape-sel"
+          style={{
+            left: selectedOutline.x,
+            top: selectedOutline.y,
+            width: selectedOutline.width,
+            height: selectedOutline.height,
+          }}
+        />
+      )}
+
       {!inScroll && box && (
         <>
           <div
@@ -1386,9 +1555,15 @@ export function Overlay({ monitorId }: Props) {
           style={style}
           canUndo={shapes.length > 0}
           busy={busy}
-          onTool={setTool}
+          onTool={(t) => {
+            setTool(t);
+            setSelectedId(null);
+          }}
           onStyle={patchStyle}
-          onUndo={() => setShapes((prev) => prev.slice(0, -1))}
+          onUndo={() => {
+            setShapes((prev) => prev.slice(0, -1));
+            setSelectedId(null);
+          }}
           onAction={(a: ToolbarAction) => {
             if (a === "cancel") void cancel();
             else if (a === "scroll") void startScroll();
@@ -1433,7 +1608,7 @@ export function Overlay({ monitorId }: Props) {
         />
       )}
 
-      {tool === "picker" && picker && (
+      {picker !== null && (tool === "picker" || (tool === "select" && !box)) && (
         <div
           className="picker-hud"
           style={{
@@ -1459,7 +1634,9 @@ export function Overlay({ monitorId }: Props) {
               </span>
             </div>
           </div>
-          <div className="picker-hint">Shift 换格式 · 点击/Q 复制</div>
+          <div className="picker-hint">
+            {tool === "picker" ? "Shift 换格式 · 点击/Q 复制" : "拖拽框选 · 点击选中窗口"}
+          </div>
         </div>
       )}
 

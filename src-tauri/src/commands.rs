@@ -114,6 +114,15 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
     })
 }
 
+/// On-screen windows for the overlay's hover-to-select (macOS; empty
+/// elsewhere). Called once per overlay mount — the window server answers in
+/// low single-digit milliseconds and the list does not need to stay fresh for
+/// the lifetime of a capture.
+#[tauri::command]
+pub fn list_windows() -> std::result::Result<Vec<crate::types::WindowInfo>, String> {
+    crate::capture::list_windows().map_err(|e| format!("{e:#}"))
+}
+
 /// Debug-only: open one of the auxiliary windows by view name.
 #[cfg(feature = "debug-hooks")]
 #[tauri::command]

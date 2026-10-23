@@ -21,6 +21,18 @@ export type CaptureSession = {
   monitors: MonitorInfo[];
 };
 
+/** An on-screen window for the overlay's hover-to-select (macOS only). */
+export type WindowInfo = {
+  id: number;
+  /** Global logical points, same space as MonitorInfo.x/y. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  owner: string;
+  title: string;
+};
+
 export type Rect = { x: number; y: number; width: number; height: number };
 
 export type CaptureAction = "copy" | "save" | "pin" | "ask";
@@ -148,6 +160,8 @@ export type ScrollFinishAction = "save" | "copy" | "cancel";
 export const api = {
   captureScreens: () => invoke<CaptureSession>("capture_screens"),
   currentSession: () => invoke<CaptureSession | null>("current_session"),
+  /** On-screen windows, front-to-back; empty on platforms without support. */
+  listWindows: () => invoke<WindowInfo[]>("list_windows"),
   cancelCapture: () => invoke<void>("cancel_capture"),
   confirmCapture: (
     monitorId: number,

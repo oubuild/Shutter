@@ -58,6 +58,52 @@ pub fn register_capture_hotkey(app: &AppHandle, accel: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Startup permission preflight, mirroring the reference tool (its binary
+/// checks `AXIsProcessTrustedWithOptions` + screen capture at launch).
+///
+/// Requesting both permissions once, up front, means the features that need
+/// them never interrupt mid-flow: screen recording is asked before the first
+/// capture, and accessibility before the first long screenshot (its
+/// auto-scroller posts wheel events, which macOS gates behind it). Each prompt
+/// only fires while the permission is actually missing; a granted run is two
+/// cheap boolean preflights.
+#[cfg(target_os = "macos")]
+fn preflight_permissions() {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    // `AXIsProcessTrusted` lives in HIServices, re-exported by
+    // ApplicationServices; the framework link path resolves it (same import
+    // as scroll/autoscroll.rs).
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> bool;
+    }
+
+    // Screen recording first: the capture warm-up below it would otherwise
+    // grab black frames on a fresh install.
+    let capture_access = core_graphics::access::ScreenCaptureAccess;
+    if !capture_access.preflight() {
+        let granted = capture_access.request();
+        log::info!("screen recording permission requested (granted now: {granted})");
+    }
+
+    // Accessibility: `prompt = true` makes the system offer the
+    // System Settings → Privacy → Accessibility hand-off dialog.
+    let options = CFDictionary::from_CFType_pairs(&[(
+        CFString::new("AXTrustedCheckOptionPrompt"),
+        CFBoolean::true_value().as_CFType(),
+    )]);
+    let trusted = unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) };
+    if trusted {
+        log::info!("accessibility permission present");
+    } else {
+        log::info!("accessibility permission missing; system prompt shown (long-screenshot auto-scroll needs it)");
+    }
+}
+
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -165,16 +211,25 @@ pub fn run() {
                 }
             });
 
+            // Ask for screen recording + accessibility once, at launch, like
+            // the reference tool — never in the middle of a capture flow.
+            #[cfg(target_os = "macos")]
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                preflight_permissions();
+            });
+
             if !settings::has_api_key() {
                 log::info!("no API key configured yet; the AI actions will prompt for one");
             }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::capture_screens,
-            commands::current_session,
-            commands::debug_report,
+            .invoke_handler(tauri::generate_handler![
+                commands::capture_screens,
+                commands::current_session,
+                commands::list_windows,
+                commands::debug_report,
             #[cfg(feature = "debug-hooks")]
             commands::debug_plain_window,
             #[cfg(feature = "debug-hooks")]

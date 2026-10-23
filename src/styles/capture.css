@@ -649,6 +649,49 @@ textarea {
   z-index: 4;
 }
 
+/* ---------- window auto-detect + shape selection ---------- */
+
+/* Outline of the window under the cursor before any selection exists (the
+   reference's click-to-select-window affordance). The label chip sits inside
+   the top-left corner so it survives windows that touch the screen edge. */
+.overlay-win-hint {
+  position: absolute;
+  border: 1.5px solid #1b77ff;
+  background: rgba(27, 119, 255, 0.07);
+  box-sizing: border-box;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.overlay-win-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 340px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  color: #fff;
+  background: rgba(27, 119, 255, 0.92);
+  border-radius: 2px 0 6px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+/* Dashed outline around the grabbed annotation (drag = move, Delete = remove,
+   double-click on text = re-edit). Purely visual; hits go through the stage. */
+.overlay-shape-sel {
+  position: absolute;
+  border: 1px dashed #1b77ff;
+  box-sizing: border-box;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 4;
+}
+
 
 /* ---------- eyedropper loupe ---------- */
 
