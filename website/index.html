@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shutter — 会思考的截图工具</title>
+<meta name="description" content="Shutter 是一款开源的桌面截图工具：区域/窗口截图、滚动长截图、贴图、内置 AI 提取文字、翻译、解释与回复建议，支持 macOS / Windows / Linux。" />
+<meta property="og:title" content="Shutter — 会思考的截图工具" />
+<meta property="og:description" content="截图 + 长截图 + 贴图 + AI 四件套，一个菜单栏小工具全搞定。开源、免费。" />
+<meta property="og:image" content="assets/ai-panel-actions.png" />
+<link rel="icon" type="image/png" href="assets/favicon.png" />
+<style>
+  :root {
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
+    --ink: #18181b;
+    --ink-dim: #52525b;
+    --ink-faint: #a1a1aa;
+    --line: #e4e4e7;
+    --surface: #ffffff;
+    --surface-alt: #f7f8fa;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background: var(--surface);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  img { max-width: 100%; display: block; }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- nav ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; }
+  .logo img { flex: none; display: block; }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; color: var(--ink-dim); }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-cta {
+    background: var(--ink); color: #fff !important;
+    padding: 7px 16px; border-radius: 999px; font-weight: 500;
+  }
+  .nav-cta:hover { background: #000; }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 84px 0 60px; text-align: center; }
+  .hero-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 13px; color: var(--ink-dim);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 14px; margin-bottom: 26px; background: var(--surface-alt);
+  }
+  .hero-badge b { color: var(--primary); font-weight: 600; }
+  h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.18; letter-spacing: -0.02em; }
+  h1 .grad {
+    background: linear-gradient(92deg, var(--primary) 10%, #7c3aed 90%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero-sub {
+    max-width: 620px; margin: 20px auto 0;
+    font-size: clamp(15px, 2.2vw, 18px); color: var(--ink-dim);
+  }
+  .hero-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 36px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 13px 26px; border-radius: 12px; font-size: 15px; font-weight: 600;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 8px 22px rgba(37, 99, 235, 0.35); }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-ghost { border: 1px solid var(--line); color: var(--ink); }
+  .btn-ghost:hover { background: var(--surface-alt); }
+  .hero-note { margin-top: 16px; font-size: 13px; color: var(--ink-faint); }
+
+  /* ---------- hero shot ---------- */
+  .hero-shot {
+    margin: 26px auto 0; max-width: 880px;
+    border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(24, 24, 27, 0.16);
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 72px 0; }
+  .kicker {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--primary); text-transform: uppercase; margin-bottom: 10px;
+  }
+  h2 { font-size: clamp(26px, 4vw, 36px); letter-spacing: -0.02em; line-height: 1.25; }
+  .section-sub { color: var(--ink-dim); margin-top: 12px; max-width: 640px; }
+  .center { text-align: center; }
+  .center .section-sub { margin-left: auto; margin-right: auto; }
+
+  .features {
+    display: grid; gap: 18px; margin-top: 44px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .feature {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 24px; background: var(--surface);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .feature:hover { transform: translateY(-3px); box-shadow: 0 14px 34px rgba(24, 24, 27, 0.08); }
+  .feature .ico {
+    width: 42px; height: 42px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(37, 99, 235, 0.1); margin-bottom: 16px;
+  }
+  .feature h3 { font-size: 16.5px; margin-bottom: 6px; }
+  .feature p { font-size: 14px; color: var(--ink-dim); }
+
+  /* ---------- AI section ---------- */
+  .ai-grid {
+    display: grid; gap: 34px; margin-top: 44px; align-items: center;
+    grid-template-columns: 1fr;
+  }
+  @media (min-width: 900px) { .ai-grid { grid-template-columns: 1fr 1fr; } }
+  .ai-shot {
+    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    box-shadow: 0 18px 48px rgba(24, 24, 27, 0.12);
+  }
+  .ai-points { display: flex; flex-direction: column; gap: 18px; }
+  .ai-points li {
+    list-style: none; display: flex; gap: 13px; align-items: flex-start;
+  }
+  .ai-points .dot {
+    flex: none; width: 26px; height: 26px; border-radius: 8px; margin-top: 2px;
+    background: rgba(37, 99, 235, 0.1); color: var(--primary);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+  }
+  .ai-points b { display: block; font-size: 15.5px; }
+  .ai-points span { font-size: 14px; color: var(--ink-dim); }
+
+  /* ---------- download ---------- */
+  #download { background: var(--surface-alt); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .dl-grid { display: grid; gap: 18px; margin-top: 44px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .dl-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 28px 24px; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .dl-card:hover { transform: translateY(-3px); box-shadow: 0 14px 34px rgba(24, 24, 27, 0.08); }
+  .dl-card .os { font-size: 17px; font-weight: 700; margin-top: 10px; }
+  .dl-card .req { font-size: 13px; color: var(--ink-faint); margin-bottom: 14px; }
+  .dl-card .btn { width: 100%; justify-content: center; }
+  .dl-files { margin-top: 10px; font-size: 12.5px; color: var(--ink-faint); line-height: 1.9; }
+  .dl-files code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
+    background: var(--surface-alt); border: 1px solid var(--line);
+    border-radius: 5px; padding: 1px 6px;
+  }
+
+  /* ---------- footer ---------- */
+  footer { padding: 44px 0 60px; color: var(--ink-faint); font-size: 13.5px; }
+  .foot-inner { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; justify-content: space-between; }
+  footer a { color: var(--ink-dim); }
+  footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="logo" href="#top">
+      <img src="assets/icon-256.png" alt="Shutter 图标" width="26" height="26" />
+      Shutter
+    </a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#ai">AI 助手</a>
+      <a href="#download">下载</a>
+      <a class="nav-cta" href="https://github.com/oubuild/Shutter" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-badge"><b class="js-version">v0.1.1</b> · 开源免费 · macOS / Windows / Linux</div>
+    <h1>截图，<span class="grad">然后交给 AI</span></h1>
+    <p class="hero-sub">
+      Shutter 是住在菜单栏里的截图工具：框选即截、点击选中窗口、滚动长截图、贴图钉在桌面，
+      再加上一键提取文字、翻译、解释与回复建议——截完的那一秒，它已经开始工作。
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#download">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M4 20h16"/></svg>
+        免费下载
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/oubuild/Shutter" target="_blank" rel="noopener">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2A10 10 0 0 0 2 12c0 4.42 2.87 8.17 6.84 9.5.5.08.66-.23.66-.47v-1.6c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.9-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.1.38-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.6 9.6 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.65.7 1.03 1.6 1.03 2.69 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.85V21c0 .27.16.58.67.48A10 10 0 0 0 22 12 10 10 0 0 0 12 2z"/></svg>
+        查看源码
+      </a>
+    </div>
+    <p class="hero-note">无需注册 · 无账号 · 安装即用</p>
+
+    <div class="hero-shot">
+      <img src="assets/ai-panel-actions.png" alt="Shutter AI 助手窗口：提取文字、翻译、解释、回复建议" loading="lazy" />
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap center">
+    <div class="kicker">Features</div>
+    <h2>截图工具该有的，它都有</h2>
+    <p class="section-sub">对标你熟悉的那款截图工具的操作手感，每一项都为键盘党和鼠标党留了快捷键。</p>
+    <div class="features">
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6M4 4v6M20 4h-6M20 4v6M4 20h6M4 20v-6M20 20h-6M20 20v-6"/></svg></div>
+        <h3>框选与选窗</h3>
+        <p>悬停自动识别应用窗口，点击整窗截取；也可以随意拖拽框选任意区域。</p>
+      </div>
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 10.5h6"/><path d="M12 13v6"/><path d="m9.5 16.5 2.5 2.5 2.5-2.5"/></svg></div>
+        <h3>滚动长截图</h3>
+        <p>自动滚动 + 智能拼接，聊天记录、长网页一图收下。拼不齐的帧宁可丢弃，绝不硬接。</p>
+      </div>
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/></svg></div>
+        <h3>贴图</h3>
+        <p>截图钉在桌面上置顶显示，对照着写文档、抄信息，不用来回切窗口。</p>
+      </div>
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4.5"/></svg></div>
+        <h3>取色器</h3>
+        <p>截图即取色：放大镜逐像素预览，HEX / RGB / HSL 一键复制。</p>
+      </div>
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M12 6v13M9 19h6"/></svg></div>
+        <h3>标注工具</h3>
+        <p>矩形、箭头、画笔、马赛克、高亮、序号、文字——写完还能拖动、删除、再编辑。</p>
+      </div>
+      <div class="feature">
+        <div class="ico"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v5"/></svg></div>
+        <h3>图库</h3>
+        <p>每张截图自动存档，缩略图浏览、一键复制、重存或删除，历史不再丢。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ai">
+  <div class="wrap">
+    <div class="ai-grid">
+      <div class="ai-shot">
+        <img src="assets/ai-panel-chat.png" alt="Shutter AI 对话：针对截图自由提问" loading="lazy" />
+      </div>
+      <div>
+        <div class="kicker">Shutter AI</div>
+        <h2>截图之后的那一步，<br />它替你做完</h2>
+        <p class="section-sub">接入任意 OpenAI 兼容接口（DeepSeek、通义千问、OpenAI、本地 Ollama…），模型随你选，数据你自己定。</p>
+        <ul class="ai-points" style="margin-top: 26px;">
+          <li><span class="dot">文</span><div><b>提取文字</b><span>图片里的文字全部抓出来，可直接编辑、复制。</span></div></li>
+          <li><span class="dot">译</span><div><b>翻译</b><span>外文界面、外文邮件，截一下就出中文。</span></div></li>
+          <li><span class="dot">解</span><div><b>解释</b><span>看不懂的报错、图表、代码，截图问它。</span></div></li>
+          <li><span class="dot">复</span><div><b>回复建议</b><span>把聊天记录截给它，帮你起草一个高情商回复。</span></div></li>
+          <li><span class="dot">聊</span><div><b>自由提问</b><span>四个动作之外的任何问题，直接对着截图问。</span></div></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap center">
+    <div class="kicker">Download</div>
+    <h2>下载 Shutter</h2>
+    <p class="section-sub">当前版本 <span class="js-version">v0.1.1</span>。也可以到 <a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary);">GitHub Releases</a> 查看全部历史版本。</p>
+    <div class="dl-grid">
+      <div class="dl-card">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16.5 12.4c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.8.9-3.5.9-.7 0-1.9-.9-3.1-.9-1.6 0-3.1 1-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.5.8 1.1 1.7 2.4 2.9 2.4 1.2 0 1.6-.8 3.1-.8 1.4 0 1.8.8 3.1.7 1.3 0 2.1-1.1 2.9-2.3.9-1.3 1.3-2.6 1.3-2.7 0 0-2.6-1-2.6-3.9zM14.2 5.2c.7-.8 1.1-1.9 1-3.2-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.5 2.9-1.3z"/></svg>
+        <div class="os">macOS</div>
+        <div class="req">macOS 12+ · Apple Silicon / Intel</div>
+        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载 dmg</a>
+        <div class="dl-files"><code>*_aarch64.dmg</code> <code>*_x64.dmg</code></div>
+      </div>
+      <div class="dl-card">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5.5 10.5 4.4v7.1H3zM3 18.5l7.5 1.1v-7H3zM12 4.2 21 3v8.5h-9zM12 19.8 21 21v-8.5h-9z"/></svg>
+        <div class="os">Windows</div>
+        <div class="req">Windows 10+ · x64</div>
+        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载安装包</a>
+        <div class="dl-files"><code>*_x64-setup.exe</code> <code>*_x64_en-US.msi</code></div>
+      </div>
+      <div class="dl-card">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3c3 0 6 2.5 6 7 0 4.5-2.7 11-6 11S6 14.5 6 10c0-4.5 3-7 6-7z"/><path d="M9 8.5h.01M15 8.5h.01M9.5 13c.7.8 1.6 1.2 2.5 1.2s1.8-.4 2.5-1.2"/></svg>
+        <div class="os">Linux</div>
+        <div class="req">x64 · deb / AppImage</div>
+        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载</a>
+        <div class="dl-files"><code>*_amd64.deb</code> <code>*_amd64.AppImage</code></div>
+      </div>
+    </div>
+    <p class="hero-note" style="margin-top: 26px;">
+      macOS 版为 ad-hoc 签名、未公证：首次打开请前往 系统设置 → 隐私与安全性 → 仍要打开。
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>Shutter — 会思考的截图工具</span>
+    <span>
+      <a href="https://github.com/oubuild/Shutter" target="_blank" rel="noopener">GitHub</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener">Releases</a>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/oubuild/Shutter/issues" target="_blank" rel="noopener">反馈问题</a>
+      &nbsp;·&nbsp; MIT License
+    </span>
+  </div>
+</footer>
+
+<script>
+  // 版本号不写死：从 GitHub Releases 读最新 tag，失败时保留 HTML 里的兜底值。
+  fetch("https://api.github.com/repos/oubuild/Shutter/releases/latest")
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((d) => {
+      if (typeof d.tag_name !== "string" || !d.tag_name) return;
+      const tag = d.tag_name.startsWith("v") ? d.tag_name : "v" + d.tag_name;
+      document.querySelectorAll(".js-version").forEach((el) => (el.textContent = tag));
+    })
+    .catch(() => {});
+</script>
+
+</body>
+</html>

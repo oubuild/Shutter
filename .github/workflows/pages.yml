@@ -1,0 +1,39 @@
+name: pages
+
+# 产品落地页（website/ 静态站点）发布到 GitHub Pages。
+# 仓库 Settings → Pages 中把 Source 设为 "GitHub Actions" 后，
+# 每次 website/** 有改动推到 main 就会自动重新部署。
+on:
+  push:
+    branches: [main]
+    paths: ["website/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署；新推送直接取代旧部署。
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy website to GitHub Pages
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
