@@ -29,7 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # enablement: 首次运行时自动把仓库 Pages 开启并设为 GitHub Actions 部署
+      # （需要本 workflow 已声明的 pages: write 权限）；已开启时是幂等空操作。
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
