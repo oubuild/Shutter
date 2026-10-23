@@ -766,7 +766,29 @@ fn native_save_dialog(default_name: &str) -> Result<Option<String>> {
             .to_string();
         return Ok(if path.is_empty() { None } else { Some(path) });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Same PowerShell dialog as `commands::save_as_dialog`: the control
+        // bar's Save button runs here without a webview round trip.
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.SaveFileDialog; \
+             $d.FileName = '{}'; $d.Filter = 'Image|*.png'; \
+             if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}",
+            default_name.replace('\'', "''")
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| anyhow!("无法打开保存对话框：{e}"))?;
+        if !output.status.success() {
+            return Ok(None); // user cancelled
+        }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = default_name;
         Err(anyhow!("当前平台不支持另存为对话框"))

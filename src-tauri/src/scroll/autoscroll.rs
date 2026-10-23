@@ -212,3 +212,23 @@ pub fn inject_capable() -> InjectCapability {
 pub fn post_scroll(_lines: i32) -> bool {
     false
 }
+
+/// Non-macOS listener stub: there is no CGEventTap equivalent wired here, so
+/// manual-scroll pause detection is off and the session runs purely on timed
+/// captures. `start` still succeeds so the session shape is identical across
+/// platforms (the field is held, never drained).
+#[cfg(not(target_os = "macos"))]
+pub struct ScrollListener;
+
+#[cfg(not(target_os = "macos"))]
+impl ScrollListener {
+    pub fn start() -> Option<Self> {
+        log::info!("[长截图] 滚动监听器仅支持 macOS，本平台跳过");
+        Some(Self)
+    }
+
+    /// Always zero: no user-wheel input is observed on this platform.
+    pub fn drain_user_lines(&self) -> i64 {
+        0
+    }
+}
