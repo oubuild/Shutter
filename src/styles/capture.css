@@ -651,17 +651,26 @@ textarea {
 
 /* ---------- window auto-detect + shape selection ---------- */
 
-/* Outline of the window under the cursor before any selection exists (the
-   reference's click-to-select-window affordance). The label chip sits inside
-   the top-left corner so it survives windows that touch the screen edge. */
+/* Live selection frame around the window under the cursor, before any
+   selection exists. The reference renders its hovered window (chooseWindow)
+   through the exact same chrome as a committed crop — 1px white stroke plus
+   the black dashed inset, with the dim mask cut open around it — so the
+   window reads as already selected; moving to another window moves the
+   frame, and a click commits it. Only the owner/title chip is ours. */
 .overlay-win-hint {
   position: absolute;
-  border: 1.5px solid #1b77ff;
-  background: rgba(27, 119, 255, 0.07);
+  border: 1px solid #fff;
   box-sizing: border-box;
-  border-radius: 2px;
   pointer-events: none;
   z-index: 3;
+}
+
+.overlay-win-hint::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px dashed #000;
+  pointer-events: none;
 }
 
 .overlay-win-label {

@@ -352,10 +352,11 @@ export function Overlay({ monitorId }: Props) {
 
       if (tool === "select") {
         drag.current = { mode: "select", start: p };
-        setBox({ x: p.x, y: p.y, width: 0, height: 0 });
+        // No zero-size box on press: the hovered window stays lit through the
+        // hold (the reference keeps its chooseWindow until bounds exist) and
+        // the first real mousemove of a drag creates the box instead.
         setShapes([]);
         setSelectedId(null);
-        setHoverWin(null);
         return;
       }
 
@@ -578,14 +579,14 @@ export function Overlay({ monitorId }: Props) {
     if (!d) return;
 
     if (d.mode === "select") {
-      if (box && !isUsableSelection(box)) {
-        // A click on a detected window selects it whole — the reference
-        // tool's default gesture, and the reason window detection exists.
-        // Only a genuine click counts: a real (if tiny) drag still means
-        // "I started drawing a box", so it just cancels.
-        const p = pos();
-        const moved = Math.hypot(p.x - d.start.x, p.y - d.start.y);
-        const w = moved <= 6 ? hitWin(p) : null;
+      // A genuine click (press/release within 6px) on a detected window
+      // selects it whole — the reference's mouseup assigns the hovered
+      // window's rect straight to the bounds; only a real (if tiny) drag
+      // means "I started drawing a box" and cancels when too small.
+      const p = pos();
+      const moved = Math.hypot(p.x - d.start.x, p.y - d.start.y);
+      if (moved <= 6) {
+        const w = hitWin(p);
         if (w && w.width >= MIN_SELECTION && w.height >= MIN_SELECTION) {
           setBox(
             clampBox(
@@ -600,6 +601,8 @@ export function Overlay({ monitorId }: Props) {
         } else {
           setBox(null);
         }
+      } else if (box && !isUsableSelection(box)) {
+        setBox(null);
       }
       return;
     }
@@ -1426,6 +1429,12 @@ export function Overlay({ monitorId }: Props) {
     selectedId !== null ? shapes.find((s) => s.id === selectedId) ?? null : null;
   const selectedOutline = selectedShape ? shapeBounds(selectedShape) : null;
 
+  // The dim opens around the crop, or — before one exists — around the
+  // hovered window. The reference renders its chooseWindow through the same
+  // mask and the same frame, so the window under the cursor reads as already
+  // selected and a click merely commits it.
+  const dimCut: Box | null = box ?? (tool === "select" && !busy ? hoverWin : null);
+
   return (
     <div className="overlay-root" style={{ cursor }} onContextMenu={(e) => e.preventDefault()}>
       {!inScroll && (
@@ -1472,18 +1481,18 @@ export function Overlay({ monitorId }: Props) {
       <div
         className="overlay-dim"
         style={
-          box
+          dimCut
             ? {
                 clipPath: `polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 0,
-                  ${box.x}px ${box.y}px, ${box.x}px ${box.y + box.height}px,
-                  ${box.x + box.width}px ${box.y + box.height}px,
-                  ${box.x + box.width}px ${box.y}px, ${box.x}px ${box.y}px)`,
+                  ${dimCut.x}px ${dimCut.y}px, ${dimCut.x}px ${dimCut.y + dimCut.height}px,
+                  ${dimCut.x + dimCut.width}px ${dimCut.y + dimCut.height}px,
+                  ${dimCut.x + dimCut.width}px ${dimCut.y}px, ${dimCut.x}px ${dimCut.y}px)`,
               }
             : undefined
         }
       />
       )}
-      {!inScroll && !box && tool === "select" && !drag.current && hoverWin && (
+      {!inScroll && !box && tool === "select" && hoverWin && (
         <div
           className="overlay-win-hint"
           style={{

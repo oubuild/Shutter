@@ -3,11 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
+<meta name="theme-color" content="#ffffff" />
 <title>Shutter — 会思考的截图工具</title>
 <meta name="description" content="Shutter 是一款开源的桌面截图工具：区域/窗口截图、滚动长截图、贴图、内置 AI 提取文字、翻译、解释与回复建议，支持 macOS / Windows / Linux。" />
 <meta property="og:title" content="Shutter — 会思考的截图工具" />
 <meta property="og:description" content="截图 + 长截图 + 贴图 + AI 四件套，一个菜单栏小工具全搞定。开源、免费。" />
-<meta property="og:image" content="assets/ai-panel-actions.png" />
+<meta property="og:image" content="https://oubuild.github.io/Shutter/assets/hero-ai.webp" />
+<meta property="og:image:width" content="1760" />
+<meta property="og:image:height" content="1100" />
+<meta property="og:url" content="https://oubuild.github.io/Shutter/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Shutter" />
+<meta name="twitter:card" content="summary_large_image" />
 <link rel="icon" type="image/png" href="assets/favicon.png" />
 <style>
   :root {
@@ -15,22 +23,23 @@
     --primary-dark: #1d4ed8;
     --ink: #18181b;
     --ink-dim: #52525b;
-    --ink-faint: #a1a1aa;
+    --ink-faint: #71717a;
     --line: #e4e4e7;
     --surface: #ffffff;
     --surface-alt: #f7f8fa;
     --radius: 14px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html { scroll-behavior: smooth; }
+  html { scroll-behavior: smooth; overflow-x: clip; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
     color: var(--ink);
     background: var(--surface);
     line-height: 1.7;
     -webkit-font-smoothing: antialiased;
+    overflow-x: clip;
   }
-  img { max-width: 100%; display: block; }
+  img { max-width: 100%; height: auto; display: block; }
   a { color: inherit; text-decoration: none; }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
 
@@ -51,6 +60,13 @@
     padding: 7px 16px; border-radius: 999px; font-weight: 500;
   }
   .nav-cta:hover { background: #000; }
+
+  /* ---------- narrow screens ---------- */
+  @media (max-width: 640px) {
+    .nav-inner { gap: 16px; }
+    .nav-links { gap: 0; }
+    .nav-links a:not(.nav-cta) { display: none; }
+  }
 
   /* ---------- hero ---------- */
   header.hero { padding: 84px 0 60px; text-align: center; }
@@ -84,9 +100,11 @@
   .hero-note { margin-top: 16px; font-size: 13px; color: var(--ink-faint); }
 
   /* ---------- hero shot ---------- */
+  /* 占位态：assets/hero-ai.webp 到位后，把边框改回 1px solid var(--line)，并删掉 aspect-ratio 与 background */
   .hero-shot {
     margin: 26px auto 0; max-width: 880px;
-    border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+    aspect-ratio: 16 / 10; background: var(--surface-alt);
+    border: 2px dashed var(--line); border-radius: 18px; overflow: hidden;
     box-shadow: 0 30px 80px rgba(24, 24, 27, 0.16);
   }
 
@@ -125,10 +143,14 @@
     grid-template-columns: 1fr;
   }
   @media (min-width: 900px) { .ai-grid { grid-template-columns: 1fr 1fr; } }
+  /* 占位态：assets/ai-chat.webp 到位后，把边框改回 1px solid var(--line)，并删掉 aspect-ratio 与 background */
   .ai-shot {
-    border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+    aspect-ratio: 4 / 3; background: var(--surface-alt);
+    border: 2px dashed var(--line); border-radius: 16px; overflow: hidden;
     box-shadow: 0 18px 48px rgba(24, 24, 27, 0.12);
   }
+  /* 占位图撑满容器，缺图时高度不塌陷、不显示破图图标与替代文字 */
+  .hero-shot img, .ai-shot img { width: 100%; height: 100%; object-fit: cover; color: transparent; }
   .ai-points { display: flex; flex-direction: column; gap: 18px; }
   .ai-points li {
     list-style: none; display: flex; gap: 13px; align-items: flex-start;
@@ -207,7 +229,12 @@
     <p class="hero-note">无需注册 · 无账号 · 安装即用</p>
 
     <div class="hero-shot">
-      <img src="assets/ai-panel-actions.png" alt="Shutter AI 助手窗口：提取文字、翻译、解释、回复建议" loading="lazy" />
+      <!-- 待补截图：assets/hero-ai.webp
+           尺寸 1760×1100（16:10，对应首屏 880px 逻辑宽的 2x）
+           内容：框选一张普通网页或文档后，AI 面板给出「提取文字」或「翻译」的正向结果
+           禁止：GitHub release notes 这类自指内容；不要露出「回复建议」那一格（会显示“无法代写回复”）
+           共同要求：同一机型、同一主题；不要 macOS 菜单栏残片、桌面阴影、滚动条残边；窗口宽度 1200–1400 -->
+      <img src="assets/hero-ai.webp" alt="Shutter 截取网页后由 AI 提取文字" loading="eager" fetchpriority="high" decoding="async" width="1760" height="1100" />
     </div>
   </div>
 </header>
@@ -256,7 +283,11 @@
   <div class="wrap">
     <div class="ai-grid">
       <div class="ai-shot">
-        <img src="assets/ai-panel-chat.png" alt="Shutter AI 对话：针对截图自由提问" loading="lazy" />
+        <!-- 待补截图：assets/ai-chat.webp
+             尺寸 1400×1050（4:3）
+             内容：同一窗口里自由对话一轮，所问问题与上面那张截图相关，回答正常且有实质内容
+             共同要求：同一机型、同一主题；不要 macOS 菜单栏残片、桌面阴影、滚动条残边；窗口宽度 1200–1400 -->
+        <img src="assets/ai-chat.webp" alt="Shutter AI 对话：针对截图自由提问" loading="lazy" decoding="async" width="1400" height="1050" />
       </div>
       <div>
         <div class="kicker">Shutter AI</div>
