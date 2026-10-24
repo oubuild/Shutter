@@ -203,14 +203,20 @@ jobs:
           # gracefully. There is no Developer ID here, so this is the honest
           # maximum; it does not make the app notarized.
           APPLE_SIGNING_IDENTITY: "-"
+          # Updater signing (tauri signer, passwordless key). The updater
+          # artifacts (.tar.gz / setup.exe + .sig) and latest.json are only
+          # produced when the private key is present; branch builds without
+          # the secret simply skip them.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # Set only for tag builds. When empty, tauri-action skips release
           # uploads entirely and only produces workflow artifacts.
           releaseId: ${{ needs.release.outputs.release_id }}
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-          # No updater plugin is configured, so a latest.json would only be
-          # noise in the release (and an empty one at that).
-          uploadUpdaterJson: false
+          # tauri-action merges each platform's signed-artifact entries into a
+          # single latest.json on the release — the app's updater endpoint.
+          uploadUpdaterJson: ${{ startsWith(github.ref, 'refs/tags/') }}
           uploadWorkflowArtifacts: true
           # Must be unique per artifact: a macOS job emits both a .app and a
           # .dmg, and a constant name would collide between the two.
@@ -245,6 +251,12 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then
             echo "Installers are incomplete; keeping the draft for a human to decide."
+            exit 1
+          fi
+          # The updater's endpoint is latest.json on this release; publishing
+          # without it would 404 every "check for updates" in the wild.
+          if ! grep -q '^latest.json$' <<<"$names"; then
+            echo "::error::latest.json is missing; the in-app updater would break."
             exit 1
           fi
           gh release edit "$GITHUB_REF_NAME" --draft=false

@@ -30,6 +30,8 @@
     "core:webview:allow-internal-toggle-devtools",
     "opener:default",
     "dialog:allow-save",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

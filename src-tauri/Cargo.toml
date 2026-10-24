@@ -34,6 +34,8 @@ dirs = "6"
 log = "0.4"
 env_logger = "0.11"
 tauri-plugin-dialog = "2.8.3"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # The API key lives in the OS credential store. `keyring` picks its backend at
 # compile time from these features, and the backend is per-platform, so each

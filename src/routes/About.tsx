@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { api, errorText } from "../lib/ipc";
+import { useAppUpdater } from "../lib/updater";
 import { formatAccelerator } from "../lib/shortcut";
 
 export function About() {
@@ -15,6 +16,7 @@ export function About() {
   const [captureAccel, setCaptureAccel] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const updater = useAppUpdater();
 
   useEffect(() => {
     api
@@ -109,11 +111,97 @@ export function About() {
 
       <section className="border-t border-base py-3.5">
         <h2 className="mb-2.5 mt-0 text-micro font-600 tracking-wider uppercase color-faint">
+          软件更新
+        </h2>
+        <div className="flex items-center gap-2.5 py-1 text-compact">
+          <span className="w-32 flex-none color-muted">当前版本</span>
+          <span className="min-w-0 flex-1 text-mini color-faint">
+            v{version ?? "…"}
+          </span>
+          {updater.phase === "idle" && (
+            <button
+              type="button"
+              className="btn-action flex-none"
+              onClick={() => void updater.check()}
+            >
+              检查更新
+            </button>
+          )}
+          {updater.phase === "checking" && (
+            <span className="flex-none text-mini color-faint">正在检查…</span>
+          )}
+          {updater.phase === "available" && (
+            <button
+              type="button"
+              className="btn-primary flex-none"
+              onClick={() => void updater.downloadAndInstall()}
+            >
+              下载并安装 v{updater.newVersion}
+            </button>
+          )}
+          {updater.phase === "downloading" && (
+            <span className="flex-none text-mini color-faint">
+              正在下载 {updater.progressLabel ?? "…"}
+            </span>
+          )}
+          {updater.phase === "ready" && (
+            <button
+              type="button"
+              className="btn-primary flex-none"
+              onClick={() => void updater.relaunch()}
+            >
+              重启生效
+            </button>
+          )}
+        </div>
+        {(updater.message || updater.error) && (
+          <p
+            className={`mb-0 mt-1.5 text-mini leading-6 ${
+              updater.error ? "text-error-600" : "color-faint"
+            }`}
+          >
+            {updater.error ?? updater.message}
+            {updater.phase === "idle" && updater.message === "已是最新版本" && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  className="btn-action flex-none"
+                  onClick={updater.openReleasePage}
+                >
+                  查看发布页
+                </button>
+              </>
+            )}
+          </p>
+        )}
+        {updater.phase === "available" && updater.notes && (
+          <p className="mb-0 mt-1.5 line-clamp-3 text-mini leading-6 color-faint">
+            {updater.notes}
+          </p>
+        )}
+        {updater.phase === "downloading" && updater.progress?.total != null && (
+          <div className="mt-2 h-1 w-full max-w-md overflow-hidden rounded-full bg-base">
+            <div
+              className="h-full rounded-full bg-primary-500"
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round((updater.progress.downloaded / updater.progress.total) * 100),
+                )}%`,
+              }}
+            />
+          </div>
+        )}
+      </section>
+
+      <section className="border-t border-base py-3.5">
+        <h2 className="mb-2.5 mt-0 text-micro font-600 tracking-wider uppercase color-faint">
           隐私
         </h2>
         <p className="text-mini leading-7 color-faint">
           只有点击 AI 动作时，当前选区的图片才会发往你在设置里配置的端点。
-          没有遥测，没有自动更新，没有后台服务。
+          没有遥测，没有后台服务；检查更新只在你点击时访问 GitHub Releases。
         </p>
       </section>
     </div>
