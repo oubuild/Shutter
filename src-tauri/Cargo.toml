@@ -1,6 +1,6 @@
 [package]
 name = "shutter"
-version = "0.4.2"
+version = "0.4.3"
 description = "Shutter — macOS screenshot, annotation, pin, and vision-assistant tool"
 authors = ["Oubuild"]
 edition = "2021"
