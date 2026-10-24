@@ -781,3 +781,18 @@ pub async fn scroll_stop(
 pub fn scroll_status() -> crate::scroll::types::ScrollStatus {
     crate::scroll::status()
 }
+
+/// Pointer entered the selection (hover mask): begin the scroll cycle.
+///
+/// The reference gates auto-scroll on the pointer being inside the selection
+/// (`将鼠标移入选区域后将开始滚动截图`); the overlay's mask reports entry.
+#[tauri::command]
+pub fn scroll_enter() -> crate::scroll::types::ScrollStatus {
+    crate::scroll::enter()
+}
+
+/// Pointer left the selection: park the session back in Armed.
+#[tauri::command]
+pub fn scroll_leave() -> crate::scroll::types::ScrollStatus {
+    crate::scroll::leave()
+}

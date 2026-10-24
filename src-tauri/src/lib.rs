@@ -244,6 +244,8 @@ pub fn run() {
             commands::scroll_resume,
             commands::scroll_stop,
             commands::scroll_status,
+            commands::scroll_enter,
+            commands::scroll_leave,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Shutter")

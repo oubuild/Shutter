@@ -56,6 +56,10 @@ const MAX_ACCUMULATED_HEIGHT: u32 = 60_000;
 struct Control {
     stop: AtomicBool,
     pause: AtomicBool,
+    /// Pointer is inside the selection (frontend hover mask drives this).
+    /// Armed sessions start injecting only when this becomes true — the
+    /// reference's 将鼠标移入选区域后将开始滚动截图 gate.
+    hovered: AtomicBool,
     /// Worker → command: the finished stitcher, handed over on completion.
     result: Mutex<Option<Finished>>,
 }
@@ -75,6 +79,22 @@ struct ActiveSession {
     _listener: Option<crate::scroll::autoscroll::ScrollListener>,
     /// Whether injection is armed for this session.
     auto_scroll: bool,
+    /// Sessions start armed: injection waits for the pointer to enter the
+    /// selection (reference `isStart` window). Non-armed (manual) sessions
+    /// begin capturing immediately.
+    armed: bool,
+    /// For toggling overlay click-through on hover transitions.
+    app: AppHandle,
+}
+
+impl ActiveSession {
+    fn overlays_click_through(&self, ignore: bool) {
+        for (label, win) in self.app.webview_windows() {
+            if label.starts_with("overlay-") {
+                let _ = win.set_ignore_cursor_events(ignore);
+            }
+        }
+    }
 }
 
 fn active() -> &'static Mutex<Option<ActiveSession>> {
@@ -88,15 +108,18 @@ pub fn status() -> ScrollStatus {
         Some(s) => {
             // Height comes from the worker only via events; the command side
             // reports the last published dimension, or zeros while running.
+            let phase = if s.control.stop.load(Ordering::SeqCst) {
+                ScrollPhase::Finished
+            } else if s.armed && !s.control.hovered.load(Ordering::SeqCst) {
+                ScrollPhase::Armed
+            } else if s.control.pause.load(Ordering::SeqCst) {
+                ScrollPhase::Paused
+            } else {
+                ScrollPhase::Recording
+            };
             ScrollStatus {
                 session_id: Some(s.id.clone()),
-                phase: if s.control.stop.load(Ordering::SeqCst) {
-                    ScrollPhase::Finished
-                } else if s.control.pause.load(Ordering::SeqCst) {
-                    ScrollPhase::Paused
-                } else {
-                    ScrollPhase::Recording
-                },
+                phase,
                 height: 0,
                 width: 0,
                 auto_scroll: s.auto_scroll,
@@ -208,7 +231,10 @@ impl Fe {
     }
 }
 
-/// The worker loop: inject → settle → capture → decide → append/reject.
+/// The worker loop: (wait for hover) → inject → settle → capture → decide →
+/// append/reject. When `armed`, injection and capture idle until the pointer
+/// enters the selection (`hovered`), and pause again when it leaves — the
+/// reference's 将鼠标移入选区域后将开始滚动截图 gate.
 fn worker_loop(
     app: AppHandle,
     monitor_id: u32,
@@ -216,6 +242,7 @@ fn worker_loop(
     first: RgbaImage,
     control: Arc<Control>,
     auto_scroll: bool,
+    armed: bool,
     session_id: String,
 ) {
     let diag = std::env::var("CAP_PHOTO_SCROLL_DIAG").is_ok();
@@ -224,7 +251,13 @@ fn worker_loop(
         session_id: session_id.clone(),
     };
     let mut stitcher = Stitcher::new(first);
-    let mut phase = ScrollPhase::Recording;
+    let mut phase = if armed {
+        // Armed: wait for the pointer before any injection. The frontend
+        // renders the reference tip 将鼠标移入选区域后将开始滚动截图.
+        ScrollPhase::Armed
+    } else {
+        ScrollPhase::Recording
+    };
     let mut note: Option<String> = None;
     let mut auto = auto_scroll;
     fe.state(
@@ -250,9 +283,23 @@ fn worker_loop(
             std::thread::sleep(Duration::from_millis(120));
             continue;
         }
-        if phase == ScrollPhase::Paused {
+        // Hover gate: an armed session runs only while the pointer is inside
+        // the selection. Leaving re-parks it in Armed without tearing
+        // anything down — 移出即停，移入继续.
+        if armed && !control.hovered.load(Ordering::SeqCst) {
+            if phase != ScrollPhase::Armed {
+                phase = ScrollPhase::Armed;
+                note = None;
+                log::info!("[长截图] 指针移出选区 → 暂停注入");
+                fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+            }
+            std::thread::sleep(Duration::from_millis(120));
+            continue;
+        }
+        if phase == ScrollPhase::Paused || phase == ScrollPhase::Armed {
             phase = ScrollPhase::Recording;
             note = None;
+            log::info!("[长截图] 指针移入选区 → 开始滚动截图");
             fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
         }
 
@@ -425,11 +472,6 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
     let first_size = first.dimensions();
 
     let session_id = uuid::Uuid::new_v4().to_string();
-    let control = Arc::new(Control {
-        stop: AtomicBool::new(false),
-        pause: AtomicBool::new(false),
-        result: Mutex::new(None),
-    });
 
     // Accessibility check → auto or manual scrolling.
     let capability = crate::scroll::autoscroll::inject_capable();
@@ -441,13 +483,24 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
         );
     }
 
+    let armed = auto_scroll;
+    let control = Arc::new(Control {
+        stop: AtomicBool::new(false),
+        pause: AtomicBool::new(false),
+        // Auto-inject sessions start armed with the pointer outside: the
+        // hover gate in the worker flips this when the mask reports entry.
+        // Manual sessions have nothing to gate and start unpaused.
+        hovered: AtomicBool::new(!armed),
+        result: Mutex::new(None),
+    });
+
     // Listen for the user's own wheel input so manual scrolling pauses cleanly.
     let listener = crate::scroll::autoscroll::ScrollListener::start();
     if listener.is_none() {
         log::warn!("[长截图] 滚动监听器不可用（无辅助功能权限？）");
     }
 
-    let worker_control = Arc::clone(&control);
+        let worker_control = Arc::clone(&control);
     let worker_app = app.clone();
     let worker_id = session_id.clone();
     let worker = std::thread::Builder::new()
@@ -460,6 +513,7 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
                 first,
                 worker_control,
                 auto_scroll,
+                armed,
                 worker_id,
             );
         })
@@ -471,21 +525,33 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
         worker: Mutex::new(Some(worker)),
         _listener: listener,
         auto_scroll,
+        armed,
+        app: app.clone(),
     });
 
     // Control-bar window (reference recorder_bar_panel): fresh per session.
     open_control_bar(app, &session_id)?;
 
-    // Click-through overlay while recording (reference setIgnoreCursorEvents).
-    for (label, win) in app.webview_windows() {
-        if label.starts_with("overlay-") {
-            let _ = win.set_ignore_cursor_events(true);
+    // Overlay interactivity: armed sessions KEEP receiving events so the
+    // hover mask over the selection can report entry/leave; the worker
+    // records click-through via the phase change once recording starts
+    // (handled in enter()). Manual sessions never inject, so the overlay
+    // stays click-through from the start (reference setIgnoreCursorEvents).
+    if !armed {
+        for (label, win) in app.webview_windows() {
+            if label.starts_with("overlay-") {
+                let _ = win.set_ignore_cursor_events(true);
+            }
         }
     }
 
     Ok(ScrollStatus {
         session_id: Some(session_id),
-        phase: ScrollPhase::Recording,
+        phase: if armed {
+            ScrollPhase::Armed
+        } else {
+            ScrollPhase::Recording
+        },
         height: first_size.1,
         width: first_size.0,
         auto_scroll,
@@ -495,6 +561,52 @@ pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatu
             Some("无辅助功能权限，请手动滚动页面".into())
         },
     })
+}
+
+/// Pointer entered the selection (frontend hover mask). Starts the inject /
+/// capture cycle and makes the overlay click-through so the page scrolls.
+pub fn enter() -> ScrollStatus {
+    let guard = active().lock().unwrap();
+    if let Some(s) = guard.as_ref() {
+        s.control.hovered.store(true, Ordering::SeqCst);
+        // While recording, the window must not eat the injected wheels.
+        s.overlays_click_through(true);
+        let phase = if s.control.pause.load(Ordering::SeqCst) {
+            ScrollPhase::Paused
+        } else {
+            ScrollPhase::Recording
+        };
+        return ScrollStatus {
+            session_id: Some(s.id.clone()),
+            phase,
+            height: 0,
+            width: 0,
+            auto_scroll: s.auto_scroll,
+            note: None,
+        };
+    }
+    ScrollStatus::default()
+}
+
+/// Pointer left the selection: park the session back in Armed (no teardown).
+pub fn leave() -> ScrollStatus {
+    let guard = active().lock().unwrap();
+    if let Some(s) = guard.as_ref() {
+        if s.armed {
+            s.control.hovered.store(false, Ordering::SeqCst);
+            // Restore overlay interactivity so the mask can see re-entry.
+            s.overlays_click_through(false);
+        }
+        return ScrollStatus {
+            session_id: Some(s.id.clone()),
+            phase: ScrollPhase::Armed,
+            height: 0,
+            width: 0,
+            auto_scroll: s.auto_scroll,
+            note: None,
+        };
+    }
+    ScrollStatus::default()
 }
 
 /// The control-bar window (reference `recorder_bar_panel`): compact,

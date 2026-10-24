@@ -34,6 +34,7 @@ import {
   type CaptureAction,
   type MonitorInfo,
   type ScrollPreview,
+  type ScrollStatus,
   type WindowInfo,
 } from "../lib/ipc";
 import {
@@ -105,7 +106,7 @@ export function Overlay({ monitorId }: Props) {
     sessionId: string;
     /** The selection the capture started from, for preview anchoring. */
     anchor: Box;
-    phase: "idle" | "recording" | "paused" | "finished" | "failed";
+    phase: ScrollStatus["phase"];
   } | null>(null);
   /** Live preview thumbnail (decoded url + computed placement). */
   const [scrollPreview, setScrollPreview] = useState<{
@@ -121,6 +122,8 @@ export function Overlay({ monitorId }: Props) {
   const previewCache = useRef(new Map<string, HTMLImageElement>());
   /** The live session id, readable from async callbacks (decode races). */
   const scrollModeRef = useRef<string | null>(null);
+  /** Hover mask element (native listeners, reference #recording-area-mask). */
+  const scrollMaskRef = useRef<HTMLDivElement | null>(null);
 
   /** Patch drawing parameters; a fresh object each time so React re-renders. */
   const patchStyle = useCallback((patch: Partial<ToolStyle>) => {
@@ -1356,6 +1359,34 @@ export function Overlay({ monitorId }: Props) {
     [scrollMode?.anchor?.x, scrollMode?.anchor?.y, scrollMode?.anchor?.width, scrollMode?.anchor?.height],
   );
 
+  /**
+   * Native listeners on the hover mask — exactly the reference's wiring
+   * (`#recording-area-mask` + addEventListener): mouseenter starts the scroll
+   * cycle, mouseleave parks it, and a passive:false wheel listener with
+   * preventDefault keeps a stray gesture from scrolling the page while armed.
+   */
+  useEffect(() => {
+    const mask = scrollMaskRef.current;
+    if (!mask || !scrollMode) return;
+    const onEnter = () => {
+      if (scrollModeRef.current) void api.scrollEnter();
+    };
+    const onLeave = () => {
+      if (scrollModeRef.current) void api.scrollLeave();
+    };
+    const onWheel = (e: WheelEvent) => e.preventDefault();
+    mask.addEventListener("mouseenter", onEnter);
+    mask.addEventListener("mouseleave", onLeave);
+    mask.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      mask.removeEventListener("mouseenter", onEnter);
+      mask.removeEventListener("mouseleave", onLeave);
+      mask.removeEventListener("wheel", onWheel);
+    };
+    // Runs whenever the mask (re)mounts with a session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollMode?.sessionId]);
+
   /** Rust event wiring for the scroll session. */
   useEffect(() => {
     if (!scrollMode) return;
@@ -1584,22 +1615,46 @@ export function Overlay({ monitorId }: Props) {
       )}
 
       {inScroll && scrollMode && (
-        <div
-          className="scroll-overlay"
-          style={{
-            left: scrollMode.anchor.x,
-            top: scrollMode.anchor.y,
-            width: scrollMode.anchor.width,
-            height: scrollMode.anchor.height,
-          }}
-        >
-          {scrollMode.phase === "recording" && !scrollTip && (
-            <div className="scroll-hint">截图过程中请不要手动滚动</div>
-          )}
-          {scrollTip && (
-            <div className={"scroll-tip " + scrollTip.kind}>{scrollTip.text}</div>
-          )}
-        </div>
+        <>
+          {/* Hover mask over the selection (reference `#recording-area-mask`):
+              while armed it receives pointer events and reports entry/leave,
+              which gates the auto-scroll injector in Rust. Native listeners
+              are attached via useEffect (below) rather than React props:
+              the reference does `addEventListener` directly, and synthetic
+              React enter/leave events are unreliable under CDP-driven input. */}
+          <div
+            ref={scrollMaskRef}
+            className="scroll-mask"
+            style={{
+              left: scrollMode.anchor.x,
+              top: scrollMode.anchor.y,
+              width: scrollMode.anchor.width,
+              height: scrollMode.anchor.height,
+            }}
+          />
+          <div
+            className="scroll-overlay"
+            style={{
+              left: scrollMode.anchor.x,
+              top: scrollMode.anchor.y,
+              width: scrollMode.anchor.width,
+              height: scrollMode.anchor.height,
+            }}
+          >
+            {scrollMode.phase === "armed" && !scrollTip && (
+              <>
+                <div className="scroll-hint">将鼠标移入选区域后将开始滚动截图</div>
+                <div className="scroll-hint sub">截图过程中请不要手动滚动</div>
+              </>
+            )}
+            {scrollMode.phase === "recording" && !scrollTip && (
+              <div className="scroll-hint">截图过程中请不要手动滚动</div>
+            )}
+            {scrollTip && (
+              <div className={"scroll-tip " + scrollTip.kind}>{scrollTip.text}</div>
+            )}
+          </div>
+        </>
       )}
 
       {scrollPreview && (

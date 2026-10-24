@@ -3,10 +3,15 @@
 use serde::{Deserialize, Serialize};
 
 /// Which phase a scroll-capture session is in.
+///
+/// `Armed` mirrors the reference's `isStart` window: the session exists, the
+/// first frame is captured, but scrolling has not begun — the user must move
+/// the pointer INTO the selection (the frontend mask) to start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScrollPhase {
     Idle,
+    Armed,
     Recording,
     Paused,
     Finished,

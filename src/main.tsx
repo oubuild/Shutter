@@ -339,7 +339,7 @@ function installIpcMock() {
   /** Long-screenshot session state machine, mirroring the Rust worker. */
   const scrollMock = {
     sessionId: null as string | null,
-    phase: "idle" as "idle" | "recording" | "paused" | "finished" | "failed",
+    phase: "idle" as "idle" | "armed" | "recording" | "paused" | "finished" | "failed",
     height: 400,
     width: 600,
     timer: null as number | null,
@@ -387,10 +387,32 @@ function installIpcMock() {
     start() {
       this.stopTimer();
       this.sessionId = "mock-scroll";
-      this.phase = "recording";
+      // Reference flow: the session starts armed (isStart) and only begins
+      // scrolling when the pointer enters the selection mask.
+      this.phase = "armed";
       this.height = 400;
       emitEvent("scroll://state", this.state());
-      this.timer = window.setInterval(() => this.tick(), 700);
+      return this.state();
+    },
+
+    /** Pointer entered the selection mask: begin scrolling. */
+    enter() {
+      if (this.phase === "armed") {
+        this.phase = "recording";
+        emitEvent("scroll://state", this.state());
+        this.stopTimer();
+        this.timer = window.setInterval(() => this.tick(), 700);
+      }
+      return this.state();
+    },
+
+    /** Pointer left the selection: park back in armed (timer stops). */
+    leave() {
+      if (this.phase === "recording") {
+        this.stopTimer();
+        this.phase = "armed";
+        emitEvent("scroll://state", this.state());
+      }
       return this.state();
     },
 
@@ -586,6 +608,14 @@ function installIpcMock() {
             resolve(status);
             break;
           }
+          case "scroll_enter": {
+            const status = scrollMock.enter();
+            resolve(status);
+            break;
+          }
+          case "scroll_leave":
+            resolve(scrollMock.leave());
+            break;
           case "scroll_pause":
             resolve(scrollMock.pause());
             break;

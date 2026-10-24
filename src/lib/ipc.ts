@@ -109,8 +109,12 @@ export type GalleryItem = {
 
 /* -------------------------------------------------------- long screenshot */
 
-/** Which phase a scroll-capture session is in. */
-export type ScrollPhase = "idle" | "recording" | "paused" | "finished" | "failed";
+/** Which phase a scroll-capture session is in.
+ *
+ * `armed` mirrors the reference `isStart` window: the session exists but
+ * scrolling waits for the pointer to enter the selection.
+ */
+export type ScrollPhase = "idle" | "armed" | "recording" | "paused" | "finished" | "failed";
 
 /** Live state of the scroll-capture session, pushed via `scroll://state`. */
 export type ScrollStatus = {
@@ -237,6 +241,10 @@ export const api = {
   scrollStop: (action: ScrollFinishAction) =>
     invoke<ScrollDone | null>("scroll_stop", { action }),
   scrollStatus: () => invoke<ScrollStatus>("scroll_status"),
+  /** Pointer entered the selection: begin the inject/capture cycle. */
+  scrollEnter: () => invoke<ScrollStatus>("scroll_enter"),
+  /** Pointer left the selection: park the session back in armed. */
+  scrollLeave: () => invoke<ScrollStatus>("scroll_leave"),
 };
 
 export const events = {
