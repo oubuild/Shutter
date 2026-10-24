@@ -259,5 +259,32 @@ jobs:
             echo "::error::latest.json is missing; the in-app updater would break."
             exit 1
           fi
+      - name: Rewrite latest.json URLs, then publish
+        # tauri-action writes API asset URLs (api.github.com/.../assets/<id>).
+        # Unauthenticated API requests are capped at 60/h per IP, so every
+        # update download behind a shared egress 403s once the quota is gone.
+        # Rewrite to /releases/download/ permalinks (no API quota), which is
+        # also the URL shape the app's CNB-mirror swap recognizes.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" --pattern latest.json --output latest.json --clobber
+          map=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
+            --jq '.assets | map({key: (.id|tostring), value: .browser_download_url}) | from_entries')
+          jq --argjson map "$map" '
+            .platforms |= with_entries(
+              .value.url as $old
+              | ($old | capture("/releases/assets/(?<id>[0-9]+)/?$")).id as $id
+              | .value.url = ($map[$id] // $old)
+            )' latest.json > latest.json.new
+          mv latest.json.new latest.json
+          if grep -q "api.github.com" latest.json; then
+            echo "::error::latest.json still references the API after rewrite"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+          echo "latest.json now points at download permalinks."
           gh release edit "$GITHUB_REF_NAME" --draft=false
           echo "Released $GITHUB_REF_NAME."

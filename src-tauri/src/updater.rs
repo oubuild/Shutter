@@ -93,6 +93,11 @@ fn to_cnb_asset_url(github_url: &str) -> Option<Url> {
 
 /// Probe whether the CNB mirror already has the asset (release sync can lag
 /// behind the GitHub publish). Any probe failure keeps the GitHub URL.
+///
+/// Probed with a GET, not a HEAD: hosts exist that answer 200 on HEAD but
+/// 403 the actual GET, and the probe must vouch for the download itself. The
+/// body is never read — dropping the response after the status line is what
+/// makes this cheap.
 async fn prefer_cnb_download(update: &mut Update) {
     let Some(cnb_url) = to_cnb_asset_url(update.download_url.as_str()) else {
         return;
@@ -102,7 +107,8 @@ async fn prefer_cnb_download(update: &mut Update) {
         .build()
     {
         Ok(client) => {
-            if client.head(cnb_url.clone()).send().await.is_ok_and(|r| r.status().is_success()) {
+            let probe = client.get(cnb_url.clone()).send().await;
+            if probe.is_ok_and(|r| r.status().is_success()) {
                 update.download_url = cnb_url;
             }
         }
@@ -165,7 +171,7 @@ pub async fn install_app_update(
             || {},
         )
         .await
-        .map_err(|e| format!("下载或安装失败：{e}"))?;
+        .map_err(|e| format!("{e}"))?;
     // On Windows the NSIS installer takes over as the process exits; on
     // macOS/Linux the bundle is already replaced and the frontend relaunches.
     Ok(())
