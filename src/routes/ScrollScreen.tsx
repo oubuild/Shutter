@@ -537,10 +537,11 @@ export function ScrollScreen() {
   useEffect(() => {
     const un: Promise<() => void>[] = [
       events.onScrollScreenshotData((d: ScrollScreenshotData) => {
-        const scale = dpr();
         setCanDraw(true);
         setCursor("crosshair");
-        setSize({ w: d.width * scale, h: d.height * scale });
+        // Logical points — exactly this webview's CSS viewport (the panel
+        // window is fullscreen-sized to the monitor in logical px).
+        setSize({ w: d.width, h: d.height });
         setMonitorId(d.monitorId);
         setSelScale(d.selectionScaleFactor);
         if (d.boundsWidth && d.boundsHeight) {

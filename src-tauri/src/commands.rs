@@ -674,14 +674,23 @@ pub fn action_hint(action: AiAction) -> &'static str {
 /* --------------------------------------------------- long screenshot (scroll) */
 
 /// `open_scroll_screenshot_event`: the screenshot overlay handed over its
-/// selection — build the dedicated `scroll_screenshot_panel_<id>` fullscreen
-/// window over the live screen (reference `assets_scrollScreen` flow).
+/// selection — close the overlays, then build the dedicated
+/// `scroll_screenshot_panel_<id>` fullscreen window over the live screen
+/// (reference `assets_scrollScreen` flow).
+///
+/// The handover must complete inside this command: closing the overlays
+/// destroys the overlay webview that issued this very invoke, so a follow-up
+/// invoke (or timer) from it would never fire.
 #[tauri::command]
 pub async fn open_scroll_screenshot_event(
     app: AppHandle,
     payload: crate::scroll::types::OpenScroll,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        cancel_capture(app.clone())?;
+        // A beat so the dead overlay is gone from the window server before the
+        // panel opens onto the live screen (reference: 100ms after close).
+        std::thread::sleep(std::time::Duration::from_millis(100));
         crate::scroll::open_panel(&app, payload).map_err(|e| format!("{e:#}"))
     })
     .await

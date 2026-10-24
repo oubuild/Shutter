@@ -241,15 +241,18 @@ export const api = {
   pinCrop: (cropId: string) => invoke<void>("pin_crop", { cropId }),
   closePin: (pinId: string) => invoke<void>("close_pin", { pinId }),
   /* Long screenshot (scroll stitching) — reference command surface. */
-  /** Overlay → Rust: build the scroll panel for this selection. */
+  /** Overlay → Rust: close the overlays and build the scroll panel for this
+   *  selection (the handover runs inside the command). */
   openScrollScreenshot: (payload: OpenScrollScreenshot) =>
     invoke<void>("open_scroll_screenshot_event", {
-      x: payload.x,
-      y: payload.y,
-      boundsWidth: payload.boundsWidth,
-      boundsHeight: payload.boundsHeight,
-      monitorIds: payload.monitorIds,
-      selectionScaleFactor: payload.selectionScaleFactor,
+      payload: {
+        x: payload.x,
+        y: payload.y,
+        boundsWidth: payload.boundsWidth,
+        boundsHeight: payload.boundsHeight,
+        monitorIds: payload.monitorIds,
+        selectionScaleFactor: payload.selectionScaleFactor,
+      },
     }),
   /** Scroll panel → Rust: mount handshake (reply re-sends the seed data). */
   scrollPanelLoaded: () => invoke<void>("scroll_screenshot_panel_loaded_event"),
@@ -265,11 +268,13 @@ export const api = {
     scaleFactor: number;
   }) =>
     invoke<void>("start_scroll_screenshot_event", {
-      x: payload.x,
-      y: payload.y,
-      width: payload.width,
-      height: payload.height,
-      scaleFactor: payload.scaleFactor,
+      payload: {
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+        scaleFactor: payload.scaleFactor,
+      },
     }),
   /** Control bar → Rust: mount handshake (disarms the watchdog). */
   scrollBarLoaded: () => invoke<void>("scroll_screenshot_bar_panel_loaded"),
@@ -286,10 +291,12 @@ export const api = {
     autoSavePath: string;
   }) =>
     invoke<void>("save_scroll_screenshot", {
-      monitorId: payload.monitorId,
-      actionType: payload.actionType,
-      filePath: payload.filePath,
-      autoSavePath: payload.autoSavePath,
+      payload: {
+        monitorId: payload.monitorId,
+        actionType: payload.actionType,
+        filePath: payload.filePath,
+        autoSavePath: payload.autoSavePath,
+      },
     }),
   /** Scroll panel → Rust: live crop of the selection (下载/保存 before
    *  recording starts — reference `screenshot_crop_event`). */
@@ -304,14 +311,16 @@ export const api = {
     autoSavePath: string;
   }) =>
     invoke<void>("screenshot_crop_event", {
-      monitorId: payload.monitorId,
-      x: payload.x,
-      y: payload.y,
-      width: payload.width,
-      height: payload.height,
-      actionType: payload.actionType,
-      filePath: payload.filePath,
-      autoSavePath: payload.autoSavePath,
+      payload: {
+        monitorId: payload.monitorId,
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+        actionType: payload.actionType,
+        filePath: payload.filePath,
+        autoSavePath: payload.autoSavePath,
+      },
     }),
   /** Panel → Rust: teardown without an image (hide + close). */
   hideScrollScreenshotPanel: () => invoke<void>("hide_scroll_screenshot_panel"),

@@ -162,8 +162,10 @@ pub fn open_panel(app: &AppHandle, payload: OpenScroll) -> Result<()> {
     // Park the seeded selection; `panel_loaded` hands it to the webview once
     // its listeners are up (the panel's own handshake event).
     let data = ScrollScreenshotData {
-        width: monitor.pixel_width,
-        height: monitor.pixel_height,
+        // Logical points, matching the panel's CSS viewport — the reference
+        // panel treats these as CSS px (its scale multiplier is 1 on macOS).
+        width: monitor.width,
+        height: monitor.height,
         monitor_id: monitor.id,
         bounds_width: payload.bounds_width,
         bounds_height: payload.bounds_height,

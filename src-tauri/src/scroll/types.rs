@@ -46,8 +46,9 @@ pub struct SaveScroll {    #[serde(default)]
 }
 
 /// `scroll_screenshot_data` → panel: window geometry plus the seeded
-/// selection. `width`/`height` are the monitor's physical pixel dimensions
-/// (the panel multiplies by its scale factor to size its CSS surface).
+/// selection. `width`/`height` are the monitor's logical point dimensions —
+/// the panel's CSS viewport (reference panel multiplies by a scale that is
+/// 1 on macOS and only compensates Windows DPI).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScrollScreenshotData {

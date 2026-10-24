@@ -1177,12 +1177,12 @@ export function Overlay({ monitorId }: Props) {
    * Begin the long screenshot on the current selection (toolbar C).
    *
    * Reference flow (`assets_screenshot` `lt` case "longScreenshot"): compute
-   * `{...bounds, monitorId, scaleFactor}` from the selection, close the
-   * screenshot overlay, then — after a 100ms beat so the panel is gone from
-   * the screen — invoke `open_scroll_screenshot_event` with `{x, y,
-   * boundsWidth, boundsHeight, monitorIds, selectionScaleFactor}`. Rust then
-   * builds the dedicated `scroll_screenshot_panel_<id>` fullscreen window;
-   * the overlay's own surface is never reused for scrolling.
+   * `{...bounds, monitorId, scaleFactor}` from the selection and hand it to
+   * `open_scroll_screenshot_event`, which closes this overlay itself, waits a
+   * 100ms beat, then builds the dedicated `scroll_screenshot_panel_<id>`
+   * fullscreen window. The handover must happen in that one command — this
+   * webview is destroyed when the overlays close, so nothing here can run
+   * afterwards.
    */
   const startScroll = useCallback(async () => {
     if (!box || !monitor || busy) return;
@@ -1192,26 +1192,17 @@ export function Overlay({ monitorId }: Props) {
     }
     setBusy(true);
     try {
-      // Leave this overlay exactly like a confirmed capture: the scroll
-      // panel must open onto the live screen, not over the frozen frame.
-      reset();
-      await api.cancelCapture();
-      window.setTimeout(() => {
-        void api
-          .openScrollScreenshot({
-            x: box.x,
-            y: box.y,
-            boundsWidth: box.width,
-            boundsHeight: box.height,
-            monitorIds: monitor.id,
-            selectionScaleFactor: monitor.scaleFactor,
-          })
-          .catch((e: unknown) => setToast(errorText(e)));
-      }, 100);
+      await api.openScrollScreenshot({
+        x: box.x,
+        y: box.y,
+        boundsWidth: box.width,
+        boundsHeight: box.height,
+        monitorIds: monitor.id,
+        selectionScaleFactor: monitor.scaleFactor,
+      });
     } catch (e) {
-      setToast(errorText(e));
-    } finally {
       setBusy(false);
+      setToast(errorText(e));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box, busy, monitor]);
