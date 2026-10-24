@@ -7,6 +7,42 @@ use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
+/// A fullscreen chromeless layer window: transparent, borderless, always on
+/// top, non-resizable. The one shape shared by the screenshot overlay, the
+/// scroll panel and the scroll control bar (`focused(false)` — the bar must
+/// not steal focus from the page being captured). Pin windows deliberately
+/// differ (shadow, resizable) and stay hand-built in `pin.rs`.
+pub fn layer_window(
+    app: &AppHandle,
+    label: &str,
+    url: &str,
+    title: &str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    focused: bool,
+) -> Result<WebviewWindow> {
+    Ok(WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        .title(title)
+        .position(x, y)
+        .inner_size(w, h)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .closable(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible_on_all_workspaces(true)
+        .accept_first_mouse(true)
+        .focused(focused)
+        .visible(true)
+        .build()?)
+}
+
 pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f64) -> Result<WebviewWindow> {
     if let Some(win) = app.get_webview_window(label) {
         let _ = win.show();

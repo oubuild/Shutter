@@ -20,7 +20,7 @@
   --text: #e6e9ef;
   --text-dim: #98a0ae;
   --text-faint: #6b7381;
-  --accent: #007aff;
+  --accent: #18181b;
   --shadow: 0 10px 34px rgba(0, 0, 0, 0.18);
 }
 
@@ -275,8 +275,9 @@ textarea {
 
 /* ---------- toolbar ----------
    Metrics measured from the reference UI: 44px bar, 8px radius, #2c2c2c on a
-   1px rgba(0,0,0,.15) border, 36px hit targets, 8px gaps, #1b77ff for the
-   selected tool. Kept as tokens so light mode is a one-line swap. */
+   1px rgba(0,0,0,.15) border, 36px hit targets, 8px gaps. The selected tool
+   uses the shadcn/ui zinc primary (#18181b). Kept as tokens so light mode is
+   a one-line swap. */
 
 .cap-toolbar {
   --bar-bg: #2c2c2c;
@@ -284,7 +285,7 @@ textarea {
   --bar-fg: #ffffff;
   --bar-hover: rgba(255, 255, 255, 0.08);
   --bar-active: rgba(255, 255, 255, 0.08);
-  --bar-accent: #1b77ff;
+  --bar-accent: #fafafa;
   --bar-divider: rgba(255, 255, 255, 0.12);
 
   position: fixed;
@@ -682,7 +683,7 @@ textarea {
   font-size: 11px;
   line-height: 17px;
   color: #fff;
-  background: rgba(27, 119, 255, 0.92);
+  background: rgba(24, 24, 27, 0.92);
   border-radius: 2px 0 6px 0;
   white-space: nowrap;
   overflow: hidden;
@@ -694,7 +695,7 @@ textarea {
    double-click on text = re-edit). Purely visual; hits go through the stage. */
 .overlay-shape-sel {
   position: absolute;
-  border: 1px dashed #1b77ff;
+  border: 1px dashed #71717a;
   box-sizing: border-box;
   border-radius: 4px;
   pointer-events: none;
@@ -773,12 +774,24 @@ textarea {
   color: var(--text-faint);
 }
 
-/* ---------- long screenshot (scroll capture) ---------- */
+/* ---------- long screenshot: fullscreen panel (ScrollScreen) ---------- */
 
-/* Invisible container over the selection area: centres its children so the
-   hint/tip pills sit over the (now hidden) selection like the reference. */
-.scroll-overlay {
+/* The transparent panel over the live screen (reference `screen-recording`). */
+.scrollpanel {
   position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* SVG selection canvas (reference `screenshots-canvas`); masks + border live
+   inside it, only the handles/move rect take pointer events. */
+.scrollpanel-canvas {
+  display: block;
+}
+
+/* Tip pills centred over the selection (reference `recording-area-tips`):
+   `px-12 py-4 rounded-8 bg-[#282D32] text-white` stacked, pointer-free. */
+.scrollpanel-tips {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -788,188 +801,183 @@ textarea {
   z-index: 101;
 }
 
-/* Invisible hit area over the selection (reference #recording-area-mask):
-   receives hover/wheel so Rust can gate the auto-scroll injector on the
-   pointer being inside the selection. Tips render above it, click-free. */
-.scroll-mask {
-  position: fixed;
-  background: transparent;
-  pointer-events: auto;
-  z-index: 100;
-}
-
-/* Secondary line of the armed tip (smaller, dimmed). */
-.scroll-hint.sub {
-  font-size: 11px;
-  opacity: 0.8;
-}
-
-/* Reference-style hint pill, centred over the selection while the auto
-   scroller runs (`截图过程中请不要手动滚动`). */
-.scroll-hint {
+.scrollpanel-tip {
   padding: 4px 12px;
   border-radius: 8px;
   background: #282d32;
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 22px;
   white-space: nowrap;
-  pointer-events: none;
+  text-align: center;
 }
 
-/* Transient tips from the Rust state machine (拒绝硬拼 etc.). Kind tints
-   follow the reference's urgency: error = red, bottom = green. */
-.scroll-tip {
-  max-width: 100%;
-  padding: 4px 12px;
-  border-radius: 8px;
-  background: #282d32;
-  color: #fff;
-  font-size: 12px;
-  line-height: 22px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  pointer-events: none;
-  animation: scroll-tip-in 0.18s ease-out;
+.scrollpanel-tip p {
+  margin: 0;
 }
 
-.scroll-tip.warn {
-  background: #4a3a1e;
-}
-
-.scroll-tip.error {
-  background: #58272b;
-}
-
-.scroll-tip.bottom,
-.scroll-tip.info {
-  background: #1f3d2b;
-}
-
-@keyframes scroll-tip-in {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-/* Live stitched-image thumbnail. Placed by the reference algorithm
-   (right → left → above → below → overlap); the 300ms opacity fade matches
-   the reference's transition. */
-.scroll-preview {
+/* Size chip above the selection (reference `Be`): `px-8 h-28 text-12 bg-[#282D32]`. */
+.scrollpanel-size {
   position: fixed;
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.12);
-  background: #fff;
-  object-fit: fill;
-  z-index: 100;
-  opacity: 1;
-  transition: opacity 0.3s ease-in-out;
-  animation: scroll-preview-in 0.3s ease-out;
-  pointer-events: none;
-}
-
-@keyframes scroll-preview-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* ---------- scroll control bar (scrollbar window) ---------- */
-
-/* The window is transparent; this strip is everything that paints. Dark,
-   rounded, matching the overlay toolbar palette. */
-.scrollbar-root {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  box-sizing: border-box;
-  background: transparent;
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.scrollbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px 6px;
-  border-radius: 10px;
-  background: #282d32;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
-}
-
-.scrollbar-sep {
-  width: 1px;
-  height: 14px;
-  margin: 0 2px;
-  background: transparent;
-}
-
-.scrollbar-btn {
+  top: 0;
+  left: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #e8eaee;
+  border-radius: 8px;
+  background: #282d32;
+  color: #fff;
   font-size: 12px;
-  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  z-index: 102;
+}
+
+/* Operations bar (reference `Te` / `.screen-recording-operations`): a 44px
+   card whose position is transform-only, never left/top. */
+.scrollpanel-bar {
+  --bar-bg: #2c2c2c;
+  --bar-border: rgba(0, 0, 0, 0.15);
+  --bar-hover: rgba(255, 255, 255, 0.12);
+
+  position: fixed;
+  left: 0;
+  top: 0;
+  visibility: visible;
+  will-change: transform;
+  transition: opacity 0.12s ease-out;
+}
+
+.scrollpanel-bar-buttons {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 8px;
+  gap: 8px;
+  border: 1px solid var(--bar-border);
+  border-radius: 8px;
+  background: var(--bar-bg);
+  color: #fff;
+  font-size: 14px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.scrollpanel-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: #fff;
   cursor: pointer;
 }
 
-.scrollbar-btn:hover:not(:disabled) {
+.scrollpanel-bar-btn:hover {
+  background: var(--bar-hover);
+}
+
+/* 开始滚动 carries a label next to the icon (reference). */
+.scrollpanel-bar-start {
+  width: auto;
+  padding: 0 8px;
+  gap: 8px;
+}
+
+/* Live stitched preview (reference `Ye`): fades in on every replace. */
+.scrollpanel-preview {
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.3s ease-in-out;
+  will-change: opacity;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- long screenshot: control bar window (ScrollRenderBar) ---------- */
+
+/* The whole window is the card (reference `h-44 py-8 px-12 rounded-8
+   dark:bg-[#2c2c2c] border-black/[.12]`). */
+.scrollbar-card {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.scrollbar-card > .scrollbar-processing,
+.scrollbar-card > .scrollbar-row {
+  display: flex;
+  flex-basis: 100%;
+}
+
+.scrollbar-row,
+.scrollbar-processing {
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: auto 0;
+  padding: 4px 12px;
+  height: 44px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: #2c2c2c;
+  color: #fff;
+  font-size: 14px;
+}
+
+.scrollbar-processing {
+  justify-content: space-between;
+}
+
+.scrollbar-processing-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* `w-14 h-14 border-2 border-current border-t-transparent animate-spin`. */
+.scrollbar-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 999px;
+  opacity: 0.6;
+  animation: scrollbar-spin 0.8s linear infinite;
+}
+
+@keyframes scrollbar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scrollbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 4px;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.scrollbar-btn:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.scrollbar-btn:disabled {
-  color: #6b7280;
-  cursor: default;
-}
-
-.scrollbar-btn-icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-}
-
-.scrollbar-btn-label {
-  white-space: nowrap;
-}
-
-/* Live `${w} × ${h}` readout, reference badge. */
-.scrollbar-badge {
-  margin-left: auto;
-  padding: 3px 10px;
-  border-radius: 8px;
-  background: #282d32;
-  color: #e8eaee;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
-}
-
-.scrollbar-error {
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: #f87171;
+/* 停止滚动/继续滚动 carries a label (reference). */
+.scrollbar-toggle {
+  gap: 8px;
+  width: auto;
+  padding: 4px 8px;
 }

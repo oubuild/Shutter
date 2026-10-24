@@ -11,7 +11,7 @@
 //!   own screenshot, so capture happens first and windows are built after.
 
 use anyhow::Result;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 /// URL for an overlay window; `CAP_PHOTO_DEBUG_BOX` preselects a region so the
 /// toolbar can be driven without a mouse during automation.
@@ -43,28 +43,17 @@ pub fn create(
     }
 
     log::info!("creating overlay window {label} at {x},{y} {width}x{height}");
-    let win = WebviewWindowBuilder::new(
+    let win = crate::windows::layer_window(
         app,
         &label,
-        WebviewUrl::App(overlay_url(monitor_id).into()),
-    )
-    .title("Shutter")
-    .position(x as f64, y as f64)
-    .inner_size(width as f64, height as f64)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .closable(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible_on_all_workspaces(true)
-    .accept_first_mouse(true)
-    .focused(true)
-    .visible(true)
-    .build()?;
+        &overlay_url(monitor_id),
+        "Shutter",
+        x as f64,
+        y as f64,
+        width as f64,
+        height as f64,
+        true,
+    )?;
 
     log::info!("overlay window {label} created");
     Ok(win)

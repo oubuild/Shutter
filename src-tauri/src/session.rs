@@ -7,8 +7,7 @@
 
 use crate::types::MonitorInfo;
 use anyhow::{anyhow, Result};
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ImageEncoder, RgbaImage};
+use image::RgbaImage;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -110,6 +109,12 @@ impl Store {
 }
 
 impl Store {
+    /// Cache file name shared by the writer ([`Store::write_frame_png`]) and
+    /// the reader (`frame_path` command) so the two cannot drift apart.
+    pub fn frame_file_name(session_id: &str, monitor_id: u32) -> String {
+        format!("frame-{session_id}-{monitor_id}.png")
+    }
+
     /// Write a monitor's frame to disk so the overlay can display the frozen
     /// desktop through the asset protocol (a data URL would be far too big).
     pub fn write_frame_png(&self, monitor_id: u32, dir: &std::path::Path) -> Result<std::path::PathBuf> {
@@ -120,24 +125,8 @@ impl Store {
             .frame(monitor_id)
             .ok_or_else(|| anyhow!("monitor {monitor_id} is not part of this session"))?;
         std::fs::create_dir_all(dir)?;
-        let path = dir.join(format!("frame-{}-{monitor_id}.png", session.id));
-        let mut buf = Vec::new();
-        // Fast compression on purpose: this runs on the capture path, and the
-        // default PNG settings spend seconds on a 5MP frame in a debug build.
-        // The overlay only needs to decode it once, so a bigger file is cheaper
-        // than the encoder's search.
-        PngEncoder::new_with_quality(
-            &mut buf,
-            CompressionType::Fast,
-            FilterType::NoFilter,
-        )
-        .write_image(
-            frame.as_raw(),
-            frame.width(),
-            frame.height(),
-            image::ExtendedColorType::Rgba8,
-        )?;
-        std::fs::write(&path, buf)?;
+        let path = dir.join(Self::frame_file_name(&session.id, monitor_id));
+        std::fs::write(&path, crate::output::encode_png_fast(frame)?)?;
         Ok(path)
     }
 }

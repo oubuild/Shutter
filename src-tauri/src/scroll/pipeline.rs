@@ -260,52 +260,6 @@ fn sample_xs(w: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Normalised cross-correlation of two strips at a given alignment
-/// (reference `ncc::strip_ncc_with_range`). Returns −1..1.
-///
-/// Retained for the finer refinement stage (the seam search in the stitcher
-/// consumes `ncc_slices` instead); kept as the reference-shaped primitive for
-/// future per-column verification.
-#[allow(dead_code)]
-fn strip_ncc(
-    prev: &RgbaImage,
-    next: &RgbaImage,
-    xs: &[u32],
-    y_prev: u32,
-    y_next: u32,
-    len: u32,
-) -> f64 {
-    let mut sa = 0f64;
-    let mut sb = 0f64;
-    let mut saa = 0f64;
-    let mut sbb = 0f64;
-    let mut sab = 0f64;
-    let mut n = 0f64;
-    for dy in 0..len {
-        for &x in xs {
-            let a = luma_at(prev, x, y_prev + dy);
-            let b = luma_at(next, x, y_next + dy);
-            sa += a;
-            sb += b;
-            saa += a * a;
-            sbb += b * b;
-            sab += a * b;
-            n += 1.0;
-        }
-    }
-    if n == 0.0 {
-        return -1.0;
-    }
-    let cov = sab - sa * sb / n;
-    let va = (saa - sa * sa / n).max(0.0);
-    let vb = (sbb - sb * sb / n).max(0.0);
-    if va <= f64::EPSILON || vb <= f64::EPSILON {
-        // Flat regions correlate with everything; treat as no evidence.
-        return -1.0;
-    }
-    cov / (va.sqrt() * vb.sqrt())
-}
-
 fn luma_at(img: &RgbaImage, x: u32, y: u32) -> f64 {
     let p = img.get_pixel(x, y);
     (p.0[0] as f64 * 30.0 + p.0[1] as f64 * 59.0 + p.0[2] as f64 * 11.0) / 100.0

@@ -171,7 +171,7 @@ pub fn debug_report(stage: String, detail: String) {
 #[tauri::command]
 pub fn frame_path(app: AppHandle, monitor_id: u32, session_id: String) -> Option<String> {
     let dir = settings::app_dir().ok()?.join("frames");
-    let path = dir.join(format!("frame-{session_id}-{monitor_id}.png"));
+    let path = dir.join(crate::session::Store::frame_file_name(&session_id, monitor_id));
     if !path.exists() {
         log::warn!("frame file missing: {}", path.display());
         return None;
@@ -539,101 +539,47 @@ pub fn open_directory(app: AppHandle, path: String) -> std::result::Result<(), S
         .map_err(|e| format!("{e}"))
 }
 
-/// Ask the user for a directory using the system's native picker.
-///
-/// Implemented with the OS tooling instead of a dialog plugin: adding a crate
-/// requires network access this project's build environment does not have.
+/// Ask the user for a directory using the dialog plugin's native picker.
 #[tauri::command]
-pub fn choose_directory() -> std::result::Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = r#"POSIX path of (choose folder with prompt "选择保存截图的目录")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|e| format!("无法打开目录选择器：{e}"))?;
-        if !output.status.success() {
-            // A non-zero exit is the user cancelling, which is not an error.
-            return Ok(None);
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let script = "\
-Add-Type -AssemblyName System.Windows.Forms; \
-$d = New-Object System.Windows.Forms.FolderBrowserDialog; \
-if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }";
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .output()
-            .map_err(|e| format!("无法打开目录选择器：{e}"))?;
-        if !output.status.success() {
-            return Ok(None);
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        Err("当前平台不支持目录选择".to_string())
+pub async fn choose_directory(app: AppHandle) -> std::result::Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("选择保存截图的目录")
+        .set_can_create_directories(true)
+        .blocking_pick_folder();
+    match picked {
+        // `None` is the user cancelling, which is not an error.
+        None => Ok(None),
+        Some(p) => p
+            .into_path()
+            .map(|path| Some(path.display().to_string()))
+            .map_err(|e| format!("无法打开目录选择器：{e}")),
     }
 }
 
-/// Native "save as" dialog. Returns the chosen path, or `None` when the user
-/// cancelled — the caller then cancels the capture, matching the reference
-/// tool's semantics.
-///
-/// Same OS-tooling approach as [`choose_directory`]: no dialog-plugin crate.
+/// Native "save as" dialog via the dialog plugin. Returns the chosen path, or
+/// `None` when the user cancelled — the caller then cancels the capture,
+/// matching the reference tool's semantics.
 #[tauri::command]
-pub fn save_as_dialog(default_name: String) -> std::result::Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        // `choose file name` saves nothing itself; it only returns a path.
-        // The name may arrive shell-quoted when it contains spaces.
-        let script = format!(
-            "POSIX path of (choose file name with prompt \"保存截图\" default name \"{}\")",
-            default_name.replace('\"', "\\\"")
-        );
-        let output = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|e| format!("无法打开保存对话框：{e}"))?;
-        if !output.status.success() {
-            // Cancelled in the dialog, not an error.
-            return Ok(None);
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().trim_matches('\'').to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $d = New-Object System.Windows.Forms.SaveFileDialog; \
-             $d.FileName = '{}'; $d.Filter = 'Image|*.png'; \
-             if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}",
-            default_name.replace('\'', "''")
-        );
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .map_err(|e| format!("无法打开保存对话框：{e}"))?;
-        if !output.status.success() {
-            return Ok(None);
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = default_name;
-        Err("当前平台不支持另存为对话框".to_string())
+pub async fn save_as_dialog(
+    app: AppHandle,
+    default_name: String,
+) -> std::result::Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("保存截图")
+        .set_file_name(default_name)
+        .blocking_save_file();
+    match picked {
+        None => Ok(None),
+        Some(p) => p
+            .into_path()
+            .map(|path| Some(path.display().to_string()))
+            .map_err(|e| format!("无法打开保存对话框：{e}")),
     }
 }
 
@@ -726,73 +672,103 @@ pub fn action_hint(action: AiAction) -> &'static str {
 
 /* --------------------------------------------------- long screenshot (scroll) */
 
-/// Begin a scroll-and-stitch session on the current selection.
-///
-/// The overlay webview calls this AFTER hiding its own chrome; the first
-/// frame is taken from the frozen session frame (not the live screen) so the
-/// selection content matches exactly what the user framed.
+/// `open_scroll_screenshot_event`: the screenshot overlay handed over its
+/// selection — build the dedicated `scroll_screenshot_panel_<id>` fullscreen
+/// window over the live screen (reference `assets_scrollScreen` flow).
 #[tauri::command]
-pub async fn scroll_start(
+pub async fn open_scroll_screenshot_event(
     app: AppHandle,
-    monitor_id: u32,
-    rect: Rect,
-) -> std::result::Result<crate::scroll::types::ScrollStatus, String> {
-    // The heavy first capture runs on the caller's thread inside scroll::begin;
-    // keep the IPC responsive by moving off the async runtime's worker.
+    payload: crate::scroll::types::OpenScroll,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::scroll::begin(&app, monitor_id, rect).map_err(|e| format!("{e:#}"))
+        crate::scroll::open_panel(&app, payload).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("open scroll panel failed: {e}"))?
+}
+
+/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake; its
+/// seeded selection is (re-)sent in reply.
+#[tauri::command]
+pub fn scroll_screenshot_panel_loaded_event(app: AppHandle) {
+    crate::scroll::panel_loaded(&app);
+}
+
+/// `drawn_scroll_screenshot_event`: the panel settled its selection; ack with
+/// `scroll_screenshot_drawn` so it stops free-drawing (canDraw=false).
+#[tauri::command]
+pub fn drawn_scroll_screenshot_event(app: AppHandle) {
+    crate::scroll::drawn(&app);
+}
+
+/// `start_scroll_screenshot_event`: begin scrolling + stitching and open the
+/// control bar (the reference's two-stage arm: 1000ms beat, then capture).
+#[tauri::command]
+pub async fn start_scroll_screenshot_event(
+    app: AppHandle,
+    payload: crate::scroll::types::StartScroll,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::scroll::start(&app, payload).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| format!("scroll start failed: {e}"))?
 }
 
-/// Pause the auto-scroller (control bar toggle).
+/// `scroll_screenshot_bar_panel_loaded`: the control bar's mount handshake
+/// (disarms the teardown watchdog).
 #[tauri::command]
-pub fn scroll_pause() -> crate::scroll::types::ScrollStatus {
-    crate::scroll::pause()
+pub fn scroll_screenshot_bar_panel_loaded(app: AppHandle) {
+    crate::scroll::bar_loaded(&app);
 }
 
-/// Resume the auto-scroller.
+/// `cancel_scroll_screenshot_event {isCancelScroll}`: pause (true) or resume
+/// (false) — `isCancelScroll` is really "stop scrolling" in the reference.
 #[tauri::command]
-pub fn scroll_resume() -> crate::scroll::types::ScrollStatus {
-    crate::scroll::resume()
+pub fn cancel_scroll_screenshot_event(app: AppHandle, is_cancel_scroll: bool) {
+    crate::scroll::cancel_scroll(&app, is_cancel_scroll);
 }
 
-/// Stop the session and dispose of the stitched image (save/copy/cancel).
-///
-/// Blocking on purpose: the worker joins within one loop iteration and the
-/// PNG encode must finish before the control bar closes itself.
+/// `save_scroll_screenshot`: finish the session and dispose of the stitched
+/// image ("copy" → clipboard + optional auto-save, "saveAs" → chosen path).
 #[tauri::command]
-pub async fn scroll_stop(
+pub async fn save_scroll_screenshot(
     app: AppHandle,
-    action: crate::scroll::types::ScrollFinishAction,
-) -> std::result::Result<Option<crate::scroll::types::ScrollDone>, String> {
+    payload: crate::scroll::types::SaveScroll,
+) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::scroll::stop(&app, action)
-            .map(Some)
-            .map_err(|e| format!("{e:#}"))
+        crate::scroll::save(&app, payload).map_err(|e| format!("{e:#}"))
     })
     .await
-    .map_err(|e| format!("scroll stop failed: {e}"))?
+    .map_err(|e| format!("scroll save failed: {e}"))?
 }
 
-/// Current session snapshot, for a control bar that mounted mid-session.
+/// `screenshot_crop_event`: the panel's own 下载/保存 — a live crop of the
+/// current selection, no stitching.
 #[tauri::command]
-pub fn scroll_status() -> crate::scroll::types::ScrollStatus {
-    crate::scroll::status()
+pub async fn screenshot_crop_event(
+    app: AppHandle,
+    payload: crate::scroll::CropEvent,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::scroll::crop_event(&app, payload).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| format!("scroll crop failed: {e}"))?
 }
 
-/// Pointer entered the selection (hover mask): begin the scroll cycle.
-///
-/// The reference gates auto-scroll on the pointer being inside the selection
-/// (`将鼠标移入选区域后将开始滚动截图`); the overlay's mask reports entry.
+/// `hide_scroll_screenshot_panel`: teardown without an image (the panel's
+/// resetAndQuit / the bar's `v()`).
 #[tauri::command]
-pub fn scroll_enter() -> crate::scroll::types::ScrollStatus {
-    crate::scroll::enter()
+pub fn hide_scroll_screenshot_panel(app: AppHandle) {
+    crate::scroll::teardown(&app);
 }
 
-/// Pointer left the selection: park the session back in Armed.
+/// `close_panel {label}`: close one window by label (reference generic).
 #[tauri::command]
-pub fn scroll_leave() -> crate::scroll::types::ScrollStatus {
-    crate::scroll::leave()
+pub fn close_panel(app: AppHandle, label: String) {
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.close();
+    }
 }
+

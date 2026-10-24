@@ -2,7 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the Shutter windows.",
-  "windows": ["main", "settings", "chat", "overlay-*", "pin-*", "scroll-bar"],
+  "windows": [
+    "main",
+    "settings",
+    "chat",
+    "overlay-*",
+    "pin-*",
+    "scroll_screenshot_panel_*",
+    "recorder_bar_panel"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -18,7 +26,10 @@
     "core:window:allow-is-maximized",
     "core:window:allow-start-resize-dragging",
     "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-set-ignore-cursor-events",
     "core:webview:allow-internal-toggle-devtools",
-    "opener:default"
+    "opener:default",
+    "dialog:allow-save",
+    "dialog:allow-open"
   ]
 }

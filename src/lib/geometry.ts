@@ -82,21 +82,6 @@ export function hitHandle(box: Box, p: Point, radius = 8): Handle {
   return null;
 }
 
-/** Anchors for the eight resize handles, in CSS px. */
-export function handlePositions(box: Box): Array<{ handle: Handle; x: number; y: number }> {
-  const { x, y, width, height } = box;
-  return [
-    { handle: "nw", x, y },
-    { handle: "n", x: x + width / 2, y },
-    { handle: "ne", x: x + width, y },
-    { handle: "e", x: x + width, y: y + height / 2 },
-    { handle: "se", x: x + width, y: y + height },
-    { handle: "s", x: x + width / 2, y: y + height },
-    { handle: "sw", x, y: y + height },
-    { handle: "w", x, y: y + height / 2 },
-  ];
-}
-
 export function cursorFor(handle: Handle): string {
   switch (handle) {
     case "nw":

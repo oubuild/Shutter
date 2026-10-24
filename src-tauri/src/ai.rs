@@ -6,7 +6,6 @@
 
 use crate::types::{AiAction, AiDelta, AiDone};
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -55,7 +54,7 @@ pub fn prompt_for(action: AiAction, lang: Option<&str>, question: Option<&str>) 
 
 /// Build the OpenAI-compatible request body.
 pub fn request_body(model: &str, system: &str, user: &str, png: &[u8]) -> Value {
-    let data_url = format!("data:image/png;base64,{}", STANDARD.encode(png));
+    let data_url = crate::output::data_url(png);
     json!({
         "model": model,
         "stream": true,

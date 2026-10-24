@@ -1,18 +1,25 @@
-//! Long-screenshot (scroll-and-stitch) session controller.
+//! Long-screenshot (scroll-and-stitch) session controller — reference
+//! architecture (`report/03-scroll-pipeline.md` §3.1, `assets_scrollScreen`
+//! + `index-DwzZEF1Z`):
 //!
-//! Reproduces the reference app's session flow (`report/03-scroll-pipeline.md`
-//! §3.1): the user picks a region on the overlay, the overlay hides its chrome
-//! and becomes click-through, a control-bar window opens, and a worker thread
-//! loops inject → settle → capture → estimate → verify → append/reject until
-//! the user stops it or the page bottoms out. Frames that cannot be aligned
-//! are re-captured in place (原地重抓) a bounded number of times; persistent
-//! failure pauses the auto-scroller with a tip instead of forcing a stitch
-//! (`拒绝硬拼`, fail closed).
+//! * a **dedicated fullscreen panel** `scroll_screenshot_panel_<id>` opened by
+//!   `open_scroll_screenshot_event`, transparent over the *live* screen, where
+//!   the user frames/adjust the selection;
+//! * a **separate control-bar window** (`recorder_bar_panel`) created when
+//!   `start_scroll_screenshot_event` fires, driving pause/resume/save;
+//! * a worker thread looping inject → settle → capture → estimate → verify →
+//!   append/reject (`拒绝硬拼`, 原地重抓 bounded), publishing the growing PNG to
+//!   `ScrollScreenshot/screen_scroll.png` (atomic replace) and
+//!   `scroll_screenshot_image_update_event`;
+//! * a handshake watchdog: the bar must answer
+//!   `scroll_screenshot_bar_panel_loaded` or the session tears itself down.
 
+use crate::scroll::pipeline::{decide, direction_reversed, median_recent, FrameDecision};
+use crate::scroll::stitch::Stitcher;
 use crate::types::Rect;
 use anyhow::{anyhow, Result};
 use image::RgbaImage;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -22,11 +29,7 @@ pub mod pipeline;
 pub mod stitch;
 pub mod types;
 
-use crate::scroll::pipeline::{decide, direction_reversed, median_recent, FrameDecision};
-use crate::scroll::stitch::Stitcher;
-use crate::scroll::types::{
-    ScrollDone, ScrollFinishAction, ScrollPhase, ScrollPreview, ScrollStatus, ScrollTip,
-};
+use crate::scroll::types::{OpenScroll, SaveScroll, ScrollScreenshotData, StartScroll};
 
 /// Lines per injected wheel step (reference: 每次固定行数, with a watchdog).
 const SCROLL_LINES: i32 = 3;
@@ -37,106 +40,500 @@ const STEP_INTERVAL: Duration = Duration::from_millis(260);
 /// Extra settle time after the last injection before capturing.
 const SETTLE: Duration = Duration::from_millis(160);
 
-/// Captures of the same position attempted when alignment fails before
-/// giving up on the frame (reference: 原地重抓, bounded).
+/// Captures of the same position attempted when alignment fails before giving
+/// up on the frame (reference: 原地重抓, bounded).
 const MAX_REGRAB: u32 = 3;
 
 /// Consecutive rejected frames before the auto-scroller pauses itself
 /// (reference: 拒绝 → 暂停自动滚动).
 const MAX_CONSECUTIVE_REJECTS: u32 = 4;
 
-/// Still frames in a row at the bottom that end the session automatically
+/// Still frames in a row at the bottom that stop the capture loop
 /// (reference: 已到达页面底部).
 const BOTTOM_STILL_FRAMES: u32 = 6;
 
 /// Height (px) beyond which stitching stops for safety (memory guard).
 const MAX_ACCUMULATED_HEIGHT: u32 = 60_000;
 
+/// How long the bar window has to answer the handshake before the session
+/// tears down (reference `arm_scroll_bar_handshake_watchdog`).
+const BAR_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Reference preview location: `appDataDir/ScrollScreenshot/screen_scroll.png`
+/// (`assets_scrollScreen` `Ye`: `await Re(d, "ScrollScreenshot/screen_scroll.png")`).
+fn preview_path(_app: &AppHandle) -> Result<std::path::PathBuf> {
+    let dir = crate::settings::app_dir()?.join("ScrollScreenshot");
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("create {}: {e}", dir.display()))?;
+    Ok(dir.join("screen_scroll.png"))
+}
+
+/// Global pointer position in display points (macOS `CGEventGetLocation`).
+#[cfg(target_os = "macos")]
+fn mouse_location() -> (f64, f64) {
+    use core_graphics::geometry::CGPoint;
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventGetLocation() -> CGPoint;
+    }
+    let p = unsafe { CGEventGetLocation() };
+    (p.x, p.y)
+}
+
 /// Shared control block: the command surface flips these, the worker reads.
 struct Control {
     stop: AtomicBool,
     pause: AtomicBool,
-    /// Pointer is inside the selection (frontend hover mask drives this).
-    /// Armed sessions start injecting only when this becomes true — the
-    /// reference's 将鼠标移入选区域后将开始滚动截图 gate.
-    hovered: AtomicBool,
+    /// Set once the control bar answered its handshake.
+    bar_loaded: AtomicBool,
     /// Worker → command: the finished stitcher, handed over on completion.
-    result: Mutex<Option<Finished>>,
+    result: Mutex<Option<Stitcher>>,
 }
 
-/// What the worker leaves behind when it exits.
-struct Finished {
-    stitcher: Stitcher,
+impl Control {
+    fn new() -> Self {
+        Self {
+            stop: AtomicBool::new(false),
+            pause: AtomicBool::new(false),
+            bar_loaded: AtomicBool::new(false),
+            result: Mutex::new(None),
+        }
+    }
 }
 
 static ACTIVE: OnceLock<Mutex<Option<ActiveSession>>> = OnceLock::new();
+/// Monotonic session counter (reference `SCROLL_BAR_OWNER_EPOCH`): lets the
+/// bar watchdog tell "its" session from a newer one that replaced it.
+static EPOCH: AtomicU64 = AtomicU64::new(0);
 
 struct ActiveSession {
-    id: String,
+    epoch: u64,
+    monitor_id: u32,
+    panel_label: String,
+    /// Seeded geometry for `scroll_screenshot_data`; re-sent when the panel
+    /// answers its mount handshake (the initial emit races webview load).
+    seeded: ScrollScreenshotData,
     control: Arc<Control>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// Listener for user wheel events; dropped to stop the thread.
+    /// User-wheel listener; dropped to stop the thread.
     _listener: Option<crate::scroll::autoscroll::ScrollListener>,
-    /// Whether injection is armed for this session.
     auto_scroll: bool,
-    /// Sessions start armed: injection waits for the pointer to enter the
-    /// selection (reference `isStart` window). Non-armed (manual) sessions
-    /// begin capturing immediately.
-    armed: bool,
-    /// For toggling overlay click-through on hover transitions.
-    app: AppHandle,
-}
-
-impl ActiveSession {
-    fn overlays_click_through(&self, ignore: bool) {
-        for (label, win) in self.app.webview_windows() {
-            if label.starts_with("overlay-") {
-                let _ = win.set_ignore_cursor_events(ignore);
-            }
-        }
-    }
 }
 
 fn active() -> &'static Mutex<Option<ActiveSession>> {
     ACTIVE.get_or_init(|| Mutex::new(None))
 }
 
-/// Public snapshot for `scroll_status` / return values.
-pub fn status() -> ScrollStatus {
+/* ------------------------------------------------------------- panel open */
+
+/// `open_scroll_screenshot_event`: build the fullscreen
+/// `scroll_screenshot_panel_<id>` window over the target monitor and park the
+/// seeded selection for `scroll_screenshot_data`.
+///
+/// The overlay closes itself 100ms before this fires, so the panel opens onto
+/// the live screen — no frozen frame, unlike the screenshot overlay.
+pub fn open_panel(app: &AppHandle, payload: OpenScroll) -> Result<()> {
+    // Replace any running session first (reference epoch guard).
+    teardown(app);
+
+    let monitor = crate::capture::find_display(payload.monitor_ids)?.info;
+
+    let label = format!("scroll_screenshot_panel_{}", monitor.id);
+    if let Some(old) = app.get_webview_window(&label) {
+        let _ = old.close();
+    }
+
+    log::info!(
+        "[长截图] 建面板 {label} @ {} {} {}x{} (选区 {},{} {}x{})",
+        monitor.x, monitor.y, monitor.width, monitor.height,
+        payload.x, payload.y, payload.bounds_width, payload.bounds_height,
+    );
+    let _win = crate::windows::layer_window(
+        app,
+        &label,
+        "index.html?view=scrollscreen",
+        "Shutter 长截图",
+        monitor.x as f64,
+        monitor.y as f64,
+        monitor.width as f64,
+        monitor.height as f64,
+        true,
+    )?;
+
+    // Park the seeded selection; `panel_loaded` hands it to the webview once
+    // its listeners are up (the panel's own handshake event).
+    let data = ScrollScreenshotData {
+        width: monitor.pixel_width,
+        height: monitor.pixel_height,
+        monitor_id: monitor.id,
+        bounds_width: payload.bounds_width,
+        bounds_height: payload.bounds_height,
+        x: payload.x,
+        y: payload.y,
+        selection_scale_factor: payload.selection_scale_factor,
+    };
+    let epoch = EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
+    *active().lock().unwrap() = Some(ActiveSession {
+        epoch,
+        monitor_id: monitor.id,
+        panel_label: label,
+        seeded: data,
+        control: Arc::new(Control::new()),
+        worker: Mutex::new(None),
+        _listener: None,
+        auto_scroll: false,
+    });
+    Ok(())
+}
+
+/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake. The
+/// seeded selection is (re-)sent here — the emit in `open_panel` races the
+/// webview load and must be treated as best-effort only.
+pub fn panel_loaded(app: &AppHandle) {
     let guard = active().lock().unwrap();
-    match guard.as_ref() {
-        Some(s) => {
-            // Height comes from the worker only via events; the command side
-            // reports the last published dimension, or zeros while running.
-            let phase = if s.control.stop.load(Ordering::SeqCst) {
-                ScrollPhase::Finished
-            } else if s.armed && !s.control.hovered.load(Ordering::SeqCst) {
-                ScrollPhase::Armed
-            } else if s.control.pause.load(Ordering::SeqCst) {
-                ScrollPhase::Paused
-            } else {
-                ScrollPhase::Recording
-            };
-            ScrollStatus {
-                session_id: Some(s.id.clone()),
-                phase,
-                height: 0,
-                width: 0,
-                auto_scroll: s.auto_scroll,
-                note: None,
-            }
-        }
-        None => ScrollStatus::default(),
+    if let Some(s) = guard.as_ref() {
+        log::info!("[长截图] 面板握手完成 → 发送初始数据 ({})", s.panel_label);
+        send_panel_data(app, &s.seeded);
     }
 }
 
-/// Physical-pixel crop of the live screen region, right now.
-fn capture_region(monitor_id: u32, rect: &crate::compose::PixelRect) -> Result<RgbaImage> {
-    let displays = crate::capture::displays()?;
-    let display = displays
-        .into_iter()
-        .find(|d| d.info.id == monitor_id)
-        .ok_or_else(|| anyhow!("显示器 {monitor_id} 不可用"))?;
+fn send_panel_data(app: &AppHandle, data: &ScrollScreenshotData) {
+    let _ = app.emit("scroll_screenshot_data", data);
+}
+
+/// `drawn_scroll_screenshot_event`: the panel finished drawing its selection.
+/// Ack with `scroll_screenshot_drawn` → the panel disables free drawing
+/// (canDraw=false, reference `ze`'s listener).
+pub fn drawn(app: &AppHandle) {
+    let _ = app.emit("scroll_screenshot_drawn", ());
+}
+
+/* ------------------------------------------------------------- start/stop */
+
+/// `start_scroll_screenshot_event`: begin the capture session and open the
+/// control bar.
+pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
+    let (control, monitor) = {
+        let guard = active().lock().unwrap();
+        let Some(s) = guard.as_ref() else {
+            return Err(anyhow!("长截图面板已关闭，请重新截图"));
+        };
+        (Arc::clone(&s.control), s.monitor_id)
+    };
+
+    let monitor_info = crate::capture::find_display(monitor)?.info;
+
+    // CSS px → physical px for capture. The panel already inset 3px per edge
+    // (its `Pe` rejects the untrusted outer ring).
+    let rect = Rect {
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+    };
+    let pixel_rect = crate::compose::to_pixel_rect(
+        rect,
+        payload.scale_factor,
+        monitor_info.pixel_width,
+        monitor_info.pixel_height,
+    )?;
+
+    // Give the compositor a beat so the first frame is clean (the panel is
+    // transparent, but the bar window below may still be materialising).
+    std::thread::sleep(Duration::from_millis(80));
+    let first = capture_region(monitor, &pixel_rect)?;
+
+    // Accessibility check → auto or manual scrolling.
+    let capability = crate::scroll::autoscroll::inject_capable();
+    let auto_scroll = capability == crate::scroll::autoscroll::InjectCapability::Ok;
+    if !auto_scroll {
+        log::info!("[长截图] 无辅助功能权限（{capability:?}）→ 手动滚动模式");
+    }
+
+    // Listen for the user's own wheel input so manual scrolling pauses cleanly.
+    let listener = crate::scroll::autoscroll::ScrollListener::start();
+    if listener.is_none() {
+        log::warn!("[长截图] 滚动监听器不可用（无辅助功能权限？）");
+    }
+
+    let worker_control = Arc::clone(&control);
+    let worker_app = app.clone();
+    let worker_monitor = monitor_info.clone();
+    let worker = std::thread::Builder::new()
+        .name("scroll-worker".into())
+        .spawn(move || {
+            worker_loop(worker_app, worker_monitor, &pixel_rect, first, worker_control, auto_scroll);
+        })
+        .map_err(|e| anyhow!("启动拼接线程失败: {e}"))?;
+    let session_epoch;
+    {
+        let mut guard = active().lock().unwrap();
+        let Some(s) = guard.as_mut() else {
+            return Err(anyhow!("长截图面板已关闭，请重新截图"));
+        };
+        s.auto_scroll = auto_scroll;
+        s._listener = listener;
+        *s.worker.lock().unwrap() = Some(worker);
+        session_epoch = s.epoch;
+    }
+
+    // Control bar (reference `recorder_bar_panel`): fresh per session. It
+    // learns the monitor id from `start_screen_recording_event`.
+    open_control_bar(app, &monitor_info)?;
+    let _ = app.emit(
+        "start_screen_recording_event",
+        crate::scroll::types::StartRecordingEvent { monitor_id: monitor },
+    );
+
+    // Reference `arm_scroll_bar_handshake_watchdog`: if the bar never answers
+    // `scroll_screenshot_bar_panel_loaded`, tear the session down.
+    arm_bar_watchdog(app.clone(), session_epoch);
+
+    Ok(())
+}
+
+/// `scroll_screenshot_bar_panel_loaded`: the bar's mount handshake.
+pub fn bar_loaded(_app: &AppHandle) {
+    let guard = active().lock().unwrap();
+    if let Some(s) = guard.as_ref() {
+        s.control.bar_loaded.store(true, Ordering::SeqCst);
+        log::info!("[长截图] 控制条握手完成 (epoch {})", s.epoch);
+    }
+}
+
+fn arm_bar_watchdog(app: AppHandle, epoch: u64) {
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + BAR_HANDSHAKE_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            let loaded = active()
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|s| s.control.bar_loaded.load(Ordering::SeqCst) && s.epoch == epoch)
+                .unwrap_or(true);
+            if loaded {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let still_ours = active()
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.epoch == epoch)
+            .unwrap_or(false);
+        if still_ours {
+            log::warn!("[长截图] 控制条握手超时 → 关闭本次长截图 (schedule_scroll_bar_close)");
+            teardown(&app);
+        }
+    });
+}
+
+/// The control-bar window: compact, borderless, always on top, parked at the
+/// bottom-center of the capture monitor. Draggable via the webview's
+/// `startDragging` (reference `window-DWUaPAi8` drag helper).
+fn open_control_bar(app: &AppHandle, monitor: &crate::types::MonitorInfo) -> Result<()> {
+    let label = "recorder_bar_panel";
+    if let Some(old) = app.get_webview_window(label) {
+        let _ = old.close();
+    }
+    let w = 330.0;
+    let h = 52.0;
+    let x = monitor.x as f64 + (monitor.width as f64 - w) / 2.0;
+    let y = monitor.y as f64 + (monitor.height as f64 - h - 48.0).max(24.0);
+
+    // focused(false): the bar must not steal focus from the page being captured.
+    let win = crate::windows::layer_window(
+        app,
+        label,
+        "index.html?view=scrollbar",
+        "Shutter 长截图",
+        x.max(0.0),
+        y.max(0.0),
+        w,
+        h,
+        false,
+    )?;
+    let _ = win.show();
+    Ok(())
+}
+
+/// `cancel_scroll_screenshot_event {isCancelScroll}`: pause (true) or resume
+/// (false) the auto-scroller. The bar flips its own toggle locally; Rust
+/// mirrors the state to the panel (`show_scroll_tip`) and to the bar
+/// (`scroll_screenshot_pause_state`).
+pub fn cancel_scroll(app: &AppHandle, is_cancel_scroll: bool) {
+    let guard = active().lock().unwrap();
+    if let Some(s) = guard.as_ref() {
+        if s.worker.lock().unwrap().is_none() {
+            return; // not started yet — nothing to pause
+        }
+        s.control.pause.store(is_cancel_scroll, Ordering::SeqCst);
+        let _ = app.emit("scroll_screenshot_pause_state", is_cancel_scroll);
+        let _ = app.emit("show_scroll_tip", is_cancel_scroll);
+    }
+}
+
+/// `save_scroll_screenshot`: stop the worker and dispose of the stitched
+/// image as asked. Windows are torn down by the caller's
+/// `hide_scroll_screenshot_panel` (+ `close_panel`), mirroring the bar's `v()`.
+pub fn save(app: &AppHandle, payload: SaveScroll) -> Result<()> {
+    let control = {
+        let guard = active().lock().unwrap();
+        let Some(s) = guard.as_ref() else {
+            return Err(anyhow!("没有正在进行的滚动截图"));
+        };
+        // A stale bar from a previous session must not hijack the current one
+        // (reference SCROLL_BAR_OWNER_EPOCH guard).
+        if let Some(id) = payload.monitor_id {
+            if id != s.monitor_id {
+                log::warn!("[长截图] 忽略旧控制条的保存请求 ({id} ≠ {})", s.monitor_id);
+                return Err(anyhow!("旧会话已结束"));
+            }
+        }
+        Arc::clone(&s.control)
+    };
+
+    let stitcher = control_stop_and_wait(&control);
+    let Some(stitcher) = stitcher else {
+        return Err(anyhow!("拼接线程尚未结束，请重试"));
+    };
+    let image = stitcher.finish();
+    let png = crate::compose::to_png(&image)?;
+
+    match payload.action_type.as_str() {
+        "copy" => {
+            crate::output::copy_image(&png)?;
+            if !payload.auto_save_path.is_empty() {
+                let _ = crate::output::save_png_at(&png, &payload.auto_save_path);
+            }
+            log::info!(
+                "[长截图] 已复制 ({}x{}){}",
+                image.width(),
+                image.height(),
+                if payload.auto_save_path.is_empty() { "" } else { " + 自动保存" }
+            );
+        }
+        "saveAs" => {
+            if payload.file_path.is_empty() {
+                return Err(anyhow!("未选择保存位置"));
+            }
+            let path = crate::output::save_png_at(&png, &payload.file_path)?;
+            log::info!("[长截图] 已保存到 {}", path.display());
+        }
+        other => return Err(anyhow!("未知的长截图保存动作 {other}")),
+    }
+    // The panel is click-through while recording; restore it so teardown
+    // animates cleanly even if the bar's follow-up calls race.
+    let _ = app.emit("scroll_screenshot_click_stop", ());
+    Ok(())
+}
+
+/// `screenshot_crop_event`: the panel's own 下载/保存 — crop the LIVE
+/// selection as a plain screenshot (no stitching; the panel toolbar only
+/// exists before recording starts).
+pub fn crop_event(app: &AppHandle, payload: CropEvent) -> Result<()> {
+    let monitor = crate::capture::find_display(payload.monitor_id)?.info;
+    let rect = crate::compose::to_pixel_rect(
+        Rect {
+            x: payload.x,
+            y: payload.y,
+            width: payload.width,
+            height: payload.height,
+        },
+        monitor.scale_factor,
+        monitor.pixel_width,
+        monitor.pixel_height,
+    )?;
+    // The panel's own tips/badge would land in the frame: hide every scroll
+    // panel window before the live crop (the caller quits right after).
+    for (label, w) in app.webview_windows() {
+        if label.starts_with("scroll_screenshot_panel_") {
+            let _ = w.hide();
+        }
+    }
+    std::thread::sleep(Duration::from_millis(120));
+    let frame = capture_region(payload.monitor_id, &rect)?;
+    let png = crate::compose::to_png(&frame)?;
+    match payload.action_type.as_str() {
+        "copy" => crate::output::copy_image(&png)?,
+        "saveAs" => {
+            if payload.file_path.is_empty() {
+                return Err(anyhow!("未选择保存位置"));
+            }
+            crate::output::save_png_at(&png, &payload.file_path)?;
+        }
+        other => return Err(anyhow!("未知的裁剪动作 {other}")),
+    }
+    if !payload.auto_save_path.is_empty() {
+        let _ = crate::output::save_png_at(&png, &payload.auto_save_path);
+    }
+    Ok(())
+}
+
+/// Payload of `screenshot_crop_event` (panel's live-crop buttons).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CropEvent {
+    pub monitor_id: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub action_type: String,
+    pub file_path: String,
+    pub auto_save_path: String,
+}
+
+/// `hide_scroll_screenshot_panel` / `hide_fullscreen_panel{scroll_screenshot}`:
+/// full teardown — stop the worker, notify the frontend, close the windows.
+pub fn teardown(app: &AppHandle) {
+    let session = active().lock().unwrap().take();
+    if let Some(s) = session {
+        s.control.stop.store(true, Ordering::SeqCst);
+        s.control.pause.store(false, Ordering::SeqCst);
+        if let Ok(mut w) = s.worker.lock() {
+            if let Some(handle) = w.take() {
+                let _ = handle.join();
+            }
+        }
+        // Drop order: the listener thread joins on drop.
+        let _ = app.emit("scroll_screen_clear", ());
+        let _ = app.emit("scroll_screenshot_click_stop", ());
+    }
+    if let Some(bar) = app.get_webview_window("recorder_bar_panel") {
+        let _ = bar.close();
+    }
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("scroll_screenshot_panel_") {
+            let _ = win.close();
+        }
+    }
+}
+
+fn control_stop_and_wait(control: &Arc<Control>) -> Option<Stitcher> {
+    control.stop.store(true, Ordering::SeqCst);
+    control.pause.store(false, Ordering::SeqCst);
+    // The worker observes the stop flag within one iteration (worst case a
+    // settle sleep); poll the result slot instead of joining a handle that
+    // teardown may already own.
+    for _ in 0..100 {
+        if let Some(s) = control.result.lock().unwrap().take() {
+            return Some(s);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
+/* ------------------------------------------------------------- the worker */
+
+/// Physical-pixel crop of a live screen region from an already-resolved
+/// display handle.
+///
+/// The `Display` must be created and used on the same thread (its inner
+/// `xcap::Monitor` is `!Send` on some platforms), so the worker resolves it
+/// once and hands it here for every frame.
+fn capture_from(display: &crate::capture::Display, rect: &crate::compose::PixelRect) -> Result<RgbaImage> {
     let frame = display.capture()?;
     let (fw, fh) = frame.dimensions();
     let x = rect.x.min(fw.saturating_sub(1));
@@ -149,125 +546,101 @@ fn capture_region(monitor_id: u32, rect: &crate::compose::PixelRect) -> Result<R
     Ok(image::imageops::crop_imm(&frame, x, y, w, h).to_image())
 }
 
-/// Context the worker needs to talk to the frontend.
-struct Fe {
-    app: AppHandle,
-    session_id: String,
+/// One-shot capture on the caller's thread.
+fn capture_region(monitor_id: u32, rect: &crate::compose::PixelRect) -> Result<RgbaImage> {
+    capture_from(&crate::capture::find_display(monitor_id)?, rect)
 }
 
-impl Fe {
-    fn state(&self, phase: ScrollPhase, height: u32, width: u32, auto: bool, note: Option<String>) {
-        let _ = self.app.emit(
-            "scroll://state",
-            ScrollStatus {
-                session_id: Some(self.session_id.clone()),
-                phase,
-                height,
-                width,
-                auto_scroll: auto,
-                note,
-            },
-        );
-    }
-
-    fn tip(&self, kind: &'static str, text: &str) {
-        let _ = self.app.emit(
-            "scroll://tip",
-            ScrollTip {
-                session_id: self.session_id.clone(),
-                kind,
-                text: text.into(),
-            },
-        );
-    }
-
-    fn preview(&self, image: &RgbaImage) {
-        let Ok(dir) = crate::settings::app_dir().map(|d| d.join("scroll")) else {
-            return;
-        };
-        if std::fs::create_dir_all(&dir).is_err() {
+/// Publish the stitched image to the reference preview path (atomic replace)
+/// and ping the panel.
+fn publish_preview(app: &AppHandle, image: &RgbaImage) {
+    let Ok(path) = preview_path(app) else {
+        return;
+    };
+    let bytes = match crate::output::encode_png_fast(image) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("[长截图] 预览 PNG 编码失败: {e:#}");
             return;
         }
-        let path = dir.join(format!("preview-{}.png", self.session_id));
-        let tmp = dir.join(format!("preview-{}.tmp", self.session_id));
-        let write: std::io::Result<()> = {
-            let mut buf = Vec::new();
-            use image::ImageEncoder;
-            let enc = image::codecs::png::PngEncoder::new_with_quality(
-                &mut buf,
-                image::codecs::png::CompressionType::Fast,
-                image::codecs::png::FilterType::NoFilter,
-            );
-            let encoded = enc.write_image(
-                image.as_raw(),
-                image.width(),
-                image.height(),
-                image::ExtendedColorType::Rgba8,
-            );
-            encoded
-                .map_err(std::io::Error::other)
-                .and_then(|_| std::fs::write(&tmp, &buf))
-        };
-        if let Err(e) = write {
-            log::warn!("[长截图] 预览 PNG 写盘失败: {e}");
-            return;
-        }
-        // Atomic replace: the frontend reloads by path + timestamp, so a
-        // half-written file can never be read (reference atomic_replace_file_with).
-        if let Err(e) = std::fs::rename(&tmp, &path) {
-            log::warn!("[长截图] 预览替换失败: {e}");
-            return;
-        }
-        let _ = self.app.asset_protocol_scope().allow_file(&path);
-        let _ = self.app.emit(
-            "scroll://preview",
-            ScrollPreview {
-                session_id: self.session_id.clone(),
-                path: path.display().to_string(),
-                width: image.width(),
-                height: image.height(),
-            },
-        );
+    };
+    // Atomic replace: the frontend reloads by path + timestamp, so a
+    // half-written file can never be read (reference atomic_replace_file_with).
+    if let Err(e) = crate::output::atomic_write(&path, &bytes) {
+        log::warn!("[长截图] 预览替换失败: {e}");
+        return;
     }
+    let _ = app.asset_protocol_scope().allow_file(&path);
+    let _ = app.emit(
+        "scroll_screenshot_image_update_event",
+        serde_json::json!({ "path": path.display().to_string() }),
+    );
 }
 
 /// The worker loop: (wait for hover) → inject → settle → capture → decide →
-/// append/reject. When `armed`, injection and capture idle until the pointer
-/// enters the selection (`hovered`), and pause again when it leaves — the
-/// reference's 将鼠标移入选区域后将开始滚动截图 gate.
+/// append/reject.
+///
+/// The hover gate follows the reference: with injection armed, scrolling only
+/// runs while the pointer is inside the selection
+/// (`将鼠标移入选区域后将开始滚动截图`), tracked through `CGEventGetLocation`
+/// because the recording panel is click-through and cannot report hover.
 fn worker_loop(
     app: AppHandle,
-    monitor_id: u32,
-    rect: crate::compose::PixelRect,
+    monitor_info: crate::types::MonitorInfo,
+    rect: &crate::compose::PixelRect,
     first: RgbaImage,
     control: Arc<Control>,
     auto_scroll: bool,
-    armed: bool,
-    session_id: String,
 ) {
     let diag = std::env::var("CAP_PHOTO_SCROLL_DIAG").is_ok();
-    let fe = Fe {
-        app: app.clone(),
-        session_id: session_id.clone(),
+
+    // Resolve the display handle once on this thread; the per-frame path then
+    // captures without re-enumerating monitors (see `capture::Display` for why
+    // the handle must stay on the thread that created it).
+    let display = match crate::capture::find_display(monitor_info.id) {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("[长截图] 无法打开显示器 {}: {e:#}", monitor_info.id);
+            let stitcher = Stitcher::new(first);
+            publish_preview(&app, stitcher.last_frame());
+            *control.result.lock().unwrap() = Some(stitcher);
+            return;
+        }
     };
-    let mut stitcher = Stitcher::new(first);
-    let mut phase = if armed {
-        // Armed: wait for the pointer before any injection. The frontend
-        // renders the reference tip 将鼠标移入选区域后将开始滚动截图.
-        ScrollPhase::Armed
-    } else {
-        ScrollPhase::Recording
-    };
-    let mut note: Option<String> = None;
-    let mut auto = auto_scroll;
-    fe.state(
-        phase,
-        stitcher.height(),
-        stitcher.width(),
-        auto,
-        note.clone(),
+
+    // Global logical rect (display points) for the hover gate.
+    let (origin_x, origin_y, scale) =
+        (monitor_info.x as f64, monitor_info.y as f64, monitor_info.scale_factor);
+    let sel_global = (
+        origin_x + rect.x as f64 / scale,
+        origin_y + rect.y as f64 / scale,
+        rect.width as f64 / scale,
+        rect.height as f64 / scale,
     );
-    fe.preview(stitcher.last_frame());
+    let pointer_inside = || -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let (mx, my) = mouse_location();
+            let (x, y, w, h) = sel_global;
+            mx >= x && mx <= x + w && my >= y && my <= y + h
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
+        }
+    };
+
+    let mut stitcher = Stitcher::new(first);
+    let mut auto = auto_scroll;
+    let mut armed = auto_scroll;
+    let mut paused_by_user = false;
+    let mut hover_paused = false;
+    if armed {
+        // Armed: wait for the pointer before any injection. The panel renders
+        // the reference tip 将鼠标移入选区域后将开始滚动截图.
+        let _ = app.emit("show_scroll_tip", true);
+    }
+    publish_preview(&app, stitcher.last_frame());
 
     let mut consecutive_rejects: u32 = 0;
     let mut bottom_stills: u32 = 0;
@@ -275,49 +648,54 @@ fn worker_loop(
 
     'outer: while !control.stop.load(Ordering::SeqCst) {
         if control.pause.load(Ordering::SeqCst) {
-            if phase != ScrollPhase::Paused {
-                phase = ScrollPhase::Paused;
-                note = Some("已暂停".into());
-                fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+            if !paused_by_user {
+                paused_by_user = true;
+                log::info!("[长截图] 已暂停（控制条）");
             }
             std::thread::sleep(Duration::from_millis(120));
             continue;
         }
-        // Hover gate: an armed session runs only while the pointer is inside
-        // the selection. Leaving re-parks it in Armed without tearing
-        // anything down — 移出即停，移入继续.
-        if armed && !control.hovered.load(Ordering::SeqCst) {
-            if phase != ScrollPhase::Armed {
-                phase = ScrollPhase::Armed;
-                note = None;
-                log::info!("[长截图] 指针移出选区 → 暂停注入");
-                fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
-            }
-            std::thread::sleep(Duration::from_millis(120));
-            continue;
+        if paused_by_user {
+            paused_by_user = false;
         }
-        if phase == ScrollPhase::Paused || phase == ScrollPhase::Armed {
-            phase = ScrollPhase::Recording;
-            note = None;
-            log::info!("[长截图] 指针移入选区 → 开始滚动截图");
-            fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+        // Hover gate: an auto-inject session runs only while the pointer is
+        // inside the selection. Leaving re-parks it without tearing anything
+        // down — 移出即停，移入继续.
+        if armed || hover_paused {
+            if !pointer_inside() {
+                if !hover_paused {
+                    hover_paused = true;
+                    log::info!("[长截图] 指针移出选区 → 暂停注入");
+                    let _ = app.emit("show_scroll_tip", true);
+                }
+                std::thread::sleep(Duration::from_millis(120));
+                continue;
+            }
+            if hover_paused || armed {
+                hover_paused = false;
+                armed = false;
+                log::info!("[长截图] 指针移入选区 → 开始滚动截图");
+                let _ = app.emit("show_scroll_tip", false);
+            }
         }
 
         // 1. Inject one wheel step and let the page settle.
         if auto {
             if !crate::scroll::autoscroll::post_scroll(SCROLL_LINES) {
                 // Injection broke mid-session (permission revoked): degrade to
-                // manual scrolling permanently, reference `自动滚动注入失败`.
+                // manual scrolling permanently (reference 自动滚动注入失败).
                 auto = false;
-                note = Some("自动滚动已停止，请手动滚动页面".into());
-                fe.tip("warn", "自动滚动注入失败，请手动滚动页面");
-                fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+                log::warn!("[长截图] 自动滚动注入失败 → 请手动滚动页面");
+                let _ = app.emit(
+                    "scroll_screenshot_error",
+                    serde_json::json!({ "message": "自动滚动已停止，请手动滚动页面" }),
+                );
             }
         }
         std::thread::sleep(STEP_INTERVAL + SETTLE);
 
         // 2. Capture.
-        let frame = match capture_region(monitor_id, &rect) {
+        let frame = match capture_from(&display, rect) {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("[长截图] 抓取失败: {e:#}");
@@ -329,7 +707,7 @@ fn worker_loop(
             if let Ok(dir) = crate::settings::app_dir().map(|d| d.join("scroll").join("diag")) {
                 let _ = std::fs::create_dir_all(&dir);
                 diag_seq += 1;
-                let _ = frame.save(dir.join(format!("{session_id}-{diag_seq:04}.png")));
+                let _ = frame.save(dir.join(format!("frame-{diag_seq:04}.png")));
             }
         }
 
@@ -342,9 +720,9 @@ fn worker_loop(
                 bottom_stills += 1;
                 log::info!("[长截图] 页面几乎未滚动 → 本帧不追加");
                 if bottom_stills >= BOTTOM_STILL_FRAMES {
-                    fe.tip("bottom", "已到达页面底部");
-                    log::info!("[长截图] 已到达页面底部 → 自动停止");
-                    phase = ScrollPhase::Finished;
+                    log::info!("[长截图] 已到达页面底部 → 停止捕获");
+                    let _ = app.emit("scroll_screenshot_click_stop", ());
+                    let _ = app.emit("scroll_screenshot_pause_state", true);
                     break 'outer;
                 }
             }
@@ -352,29 +730,34 @@ fn worker_loop(
                 bottom_stills = 0;
                 consecutive_rejects = 0;
                 if direction_reversed(stitcher.history(), offset) {
-                    fe.tip(
-                        "warn",
-                        "检测到滚动方向反转 → 已拦截本次滚动 → 保留当前结果并暂停",
-                    );
-                    log::info!("[长截图] 方向反转，拦截并暂停");
+                    log::info!("[长截图] 检测到滚动方向反转 → 已拦截本次滚动 → 保留当前结果并暂停");
                     control.pause.store(true, Ordering::SeqCst);
+                    let _ = app.emit("scroll_screenshot_pause_state", true);
+                    let _ = app.emit(
+                        "scroll_screenshot_error",
+                        serde_json::json!({ "message": "检测到滚动方向反转，已暂停" }),
+                    );
                     continue;
                 }
                 let added = stitcher.append(frame, &decision, offset);
                 if added > 0 {
-                    fe.preview(stitcher.last_frame());
-                    fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+                    publish_preview(&app, stitcher.last_frame());
                 }
                 if stitcher.height() >= MAX_ACCUMULATED_HEIGHT {
                     log::warn!("[长截图] 累计高度达上限，自动停止");
-                    fe.tip("info", "长图已达最大高度，自动停止");
-                    phase = ScrollPhase::Finished;
+                    let _ = app.emit("scroll_screenshot_click_stop", ());
+                    let _ = app.emit("scroll_screenshot_pause_state", true);
+                    let _ = app.emit(
+                        "scroll_screenshot_error",
+                        serde_json::json!({ "message": "长图已达最大高度，自动停止" }),
+                    );
                     break 'outer;
                 }
             }
             FrameDecision::Reversed => {
-                fe.tip("warn", "检测到滚动方向反转 → 已拦截本次滚动");
+                log::info!("[长截图] 检测到滚动方向反转 → 已拦截本次滚动");
                 control.pause.store(true, Ordering::SeqCst);
+                let _ = app.emit("scroll_screenshot_pause_state", true);
             }
             FrameDecision::TooLarge
             | FrameDecision::LowConfidence
@@ -390,7 +773,7 @@ fn worker_loop(
                 let mut accepted = false;
                 for _ in 0..MAX_REGRAB {
                     std::thread::sleep(SETTLE);
-                    let Ok(retry) = capture_region(monitor_id, &rect) else {
+                    let Ok(retry) = capture_from(&display, rect) else {
                         continue;
                     };
                     let d2 = decide(stitcher.last_frame(), &retry, prior);
@@ -398,14 +781,7 @@ fn worker_loop(
                         FrameDecision::Append { offset, .. } => {
                             let added = stitcher.append(retry.clone(), &d2, offset);
                             if added > 0 {
-                                fe.preview(stitcher.last_frame());
-                                fe.state(
-                                    phase,
-                                    stitcher.height(),
-                                    stitcher.width(),
-                                    auto,
-                                    note.clone(),
-                                );
+                                publish_preview(&app, stitcher.last_frame());
                             }
                             accepted = true;
                             break;
@@ -424,9 +800,11 @@ fn worker_loop(
                     );
                     if consecutive_rejects >= MAX_CONSECUTIVE_REJECTS {
                         control.pause.store(true, Ordering::SeqCst);
-                        fe.tip("error", "拼接失败，请回到拼接点缓慢滚动页面");
-                        note = Some("连续多帧无法拼接，已暂停".into());
-                        fe.state(phase, stitcher.height(), stitcher.width(), auto, note.clone());
+                        let _ = app.emit("scroll_screenshot_pause_state", true);
+                        let _ = app.emit(
+                            "scroll_screenshot_error",
+                            serde_json::json!({ "message": "拼接失败，请回到拼接点缓慢滚动页面" }),
+                        );
                         consecutive_rejects = 0;
                     }
                 } else {
@@ -436,473 +814,5 @@ fn worker_loop(
         }
     }
 
-    if phase == ScrollPhase::Recording {
-        phase = ScrollPhase::Finished;
-    }
-    fe.state(phase, stitcher.height(), stitcher.width(), auto, note);
-    *control.result.lock().unwrap() = Some(Finished { stitcher });
-    let _ = app.emit("scroll://worker-done", &session_id);
-}
-
-/// Begin a scroll-capture session on the given selection.
-///
-/// Called from `scroll_start` after the overlay has hidden its chrome: the
-/// first capture must not contain any of our windows, so a short compose
-/// settle precedes it. Replaces any running session (reference epoch guard).
-pub fn begin(app: &AppHandle, monitor_id: u32, rect: Rect) -> Result<ScrollStatus> {
-    // Tear down any previous session first.
-    cancel(app);
-
-    // The overlay hid its chrome just before invoking; give the compositor a
-    // beat so the first frame is clean (reference 启动耗时 log).
-    std::thread::sleep(Duration::from_millis(80));
-
-    let session = app.state::<Arc<crate::session::Store>>();
-    let monitor = session
-        .current()
-        .and_then(|s| s.monitor(monitor_id).cloned())
-        .ok_or_else(|| anyhow!("截图会话已结束，请重新截图"))?;
-    let frame = session
-        .current()
-        .and_then(|s| s.frame(monitor_id).cloned())
-        .ok_or_else(|| anyhow!("找不到显示器 {monitor_id} 的画面"))?;
-    let scale = monitor.scale_factor;
-    let pixel_rect = crate::compose::to_pixel_rect(rect, scale, frame.width(), frame.height())?;
-    let first = crate::compose::crop(&frame, pixel_rect)?;
-    let first_size = first.dimensions();
-
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    // Accessibility check → auto or manual scrolling.
-    let capability = crate::scroll::autoscroll::inject_capable();
-    let auto_scroll = capability == crate::scroll::autoscroll::InjectCapability::Ok;
-    if !auto_scroll {
-        log::info!(
-            "[长截图] 无辅助功能权限（{:?}）→ 手动滚动模式",
-            capability
-        );
-    }
-
-    let armed = auto_scroll;
-    let control = Arc::new(Control {
-        stop: AtomicBool::new(false),
-        pause: AtomicBool::new(false),
-        // Auto-inject sessions start armed with the pointer outside: the
-        // hover gate in the worker flips this when the mask reports entry.
-        // Manual sessions have nothing to gate and start unpaused.
-        hovered: AtomicBool::new(!armed),
-        result: Mutex::new(None),
-    });
-
-    // Listen for the user's own wheel input so manual scrolling pauses cleanly.
-    let listener = crate::scroll::autoscroll::ScrollListener::start();
-    if listener.is_none() {
-        log::warn!("[长截图] 滚动监听器不可用（无辅助功能权限？）");
-    }
-
-        let worker_control = Arc::clone(&control);
-    let worker_app = app.clone();
-    let worker_id = session_id.clone();
-    let worker = std::thread::Builder::new()
-        .name(format!("scroll-worker-{session_id}"))
-        .spawn(move || {
-            worker_loop(
-                worker_app,
-                monitor_id,
-                pixel_rect,
-                first,
-                worker_control,
-                auto_scroll,
-                armed,
-                worker_id,
-            );
-        })
-        .map_err(|e| anyhow!("启动拼接线程失败: {e}"))?;
-
-    *active().lock().unwrap() = Some(ActiveSession {
-        id: session_id.clone(),
-        control,
-        worker: Mutex::new(Some(worker)),
-        _listener: listener,
-        auto_scroll,
-        armed,
-        app: app.clone(),
-    });
-
-    // Control-bar window (reference recorder_bar_panel): fresh per session.
-    open_control_bar(app, &session_id)?;
-
-    // Overlay interactivity: armed sessions KEEP receiving events so the
-    // hover mask over the selection can report entry/leave; the worker
-    // records click-through via the phase change once recording starts
-    // (handled in enter()). Manual sessions never inject, so the overlay
-    // stays click-through from the start (reference setIgnoreCursorEvents).
-    if !armed {
-        for (label, win) in app.webview_windows() {
-            if label.starts_with("overlay-") {
-                let _ = win.set_ignore_cursor_events(true);
-            }
-        }
-    }
-
-    Ok(ScrollStatus {
-        session_id: Some(session_id),
-        phase: if armed {
-            ScrollPhase::Armed
-        } else {
-            ScrollPhase::Recording
-        },
-        height: first_size.1,
-        width: first_size.0,
-        auto_scroll,
-        note: if auto_scroll {
-            None
-        } else {
-            Some("无辅助功能权限，请手动滚动页面".into())
-        },
-    })
-}
-
-/// Pointer entered the selection (frontend hover mask). Starts the inject /
-/// capture cycle and makes the overlay click-through so the page scrolls.
-pub fn enter() -> ScrollStatus {
-    let guard = active().lock().unwrap();
-    if let Some(s) = guard.as_ref() {
-        s.control.hovered.store(true, Ordering::SeqCst);
-        // While recording, the window must not eat the injected wheels.
-        s.overlays_click_through(true);
-        let phase = if s.control.pause.load(Ordering::SeqCst) {
-            ScrollPhase::Paused
-        } else {
-            ScrollPhase::Recording
-        };
-        return ScrollStatus {
-            session_id: Some(s.id.clone()),
-            phase,
-            height: 0,
-            width: 0,
-            auto_scroll: s.auto_scroll,
-            note: None,
-        };
-    }
-    ScrollStatus::default()
-}
-
-/// Pointer left the selection: park the session back in Armed (no teardown).
-pub fn leave() -> ScrollStatus {
-    let guard = active().lock().unwrap();
-    if let Some(s) = guard.as_ref() {
-        if s.armed {
-            s.control.hovered.store(false, Ordering::SeqCst);
-            // Restore overlay interactivity so the mask can see re-entry.
-            s.overlays_click_through(false);
-        }
-        return ScrollStatus {
-            session_id: Some(s.id.clone()),
-            phase: ScrollPhase::Armed,
-            height: 0,
-            width: 0,
-            auto_scroll: s.auto_scroll,
-            note: None,
-        };
-    }
-    ScrollStatus::default()
-}
-
-/// The control-bar window (reference `recorder_bar_panel`): compact,
-/// borderless, always-on-top, does not steal focus from the scrolled page.
-fn open_control_bar(app: &AppHandle, session_id: &str) -> Result<()> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-    let label = "scroll-bar";
-    if let Some(old) = app.get_webview_window(label) {
-        let _ = old.close();
-    }
-    // Park it near the bottom-center of the primary monitor.
-    let (sw, sh) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| {
-            (
-                (m.size().width as f64 / m.scale_factor()) as f64,
-                (m.size().height as f64 / m.scale_factor()) as f64,
-            )
-        })
-        .unwrap_or((1440.0, 900.0));
-    let w = 360.0;
-    let h = 52.0;
-    let x = (sw - w) / 2.0;
-    let y = (sh - h - 48.0).max(24.0);
-
-    let win = WebviewWindowBuilder::new(
-        app,
-        label,
-        WebviewUrl::App(
-            format!("index.html?view=scrollbar&session={session_id}").into(),
-        ),
-    )
-    .title("Shutter 长截图")
-    .position(x, y)
-    .inner_size(w, h)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .resizable(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .focused(false)
-    .build()?;
-    let _ = win.show();
-    Ok(())
-}
-
-/// Pause the auto-scroller (user toggled on the control bar).
-pub fn pause() -> ScrollStatus {
-    let guard = active().lock().unwrap();
-    if let Some(s) = guard.as_ref() {
-        s.control.pause.store(true, Ordering::SeqCst);
-        return ScrollStatus {
-            session_id: Some(s.id.clone()),
-            phase: ScrollPhase::Paused,
-            height: 0,
-            width: 0,
-            auto_scroll: s.auto_scroll,
-            note: None,
-        };
-    }
-    ScrollStatus::default()
-}
-
-/// Resume after a pause.
-pub fn resume() -> ScrollStatus {
-    let guard = active().lock().unwrap();
-    if let Some(s) = guard.as_ref() {
-        s.control.pause.store(false, Ordering::SeqCst);
-        return ScrollStatus {
-            session_id: Some(s.id.clone()),
-            phase: ScrollPhase::Recording,
-            height: 0,
-            width: 0,
-            auto_scroll: s.auto_scroll,
-            note: None,
-        };
-    }
-    ScrollStatus::default()
-}
-
-/// Tear the session down without producing an image (reference
-/// `cancel_scroll_screenshot`).
-pub fn cancel(app: &AppHandle) {
-    {
-        let mut guard = active().lock().unwrap();
-        if let Some(s) = guard.take() {
-            s.control.stop.store(true, Ordering::SeqCst);
-            s.control.pause.store(false, Ordering::SeqCst);
-            if let Ok(mut w) = s.worker.lock() {
-                if let Some(handle) = w.take() {
-                    let _ = handle.join();
-                }
-            }
-            // Drop order: the listener thread joins on drop.
-        }
-    }
-    if let Some(bar) = app.get_webview_window("scroll-bar") {
-        let _ = bar.close();
-    }
-    // Restore overlay interactivity.
-    for (label, win) in app.webview_windows() {
-        if label.starts_with("overlay-") {
-            let _ = win.set_ignore_cursor_events(false);
-        }
-    }
-}
-
-/// Stop the session and dispose of the stitched image as asked.
-///
-/// `save` runs the native save dialog (via the existing `save_as_dialog`
-/// command implementation — reproduced here to avoid a webview round trip,
-/// since the overlay may be mid-teardown) and writes the final PNG.
-pub fn stop(app: &AppHandle, action: ScrollFinishAction) -> Result<ScrollDone> {
-    // Signal stop, then join the worker OUTSIDE the global lock (it may need
-    // one loop iteration to notice; holding the mutex meanwhile would wedge
-    // scroll_status/pause from the control bar).
-    let (id, control) = {
-        let mut guard = active().lock().unwrap();
-        match guard.as_mut() {
-            Some(s) => {
-                s.control.pause.store(false, Ordering::SeqCst);
-                s.control.stop.store(true, Ordering::SeqCst);
-                // Detach the worker handle: it observes the stop flag within
-                // one loop iteration and exits by itself.
-                let _ = s.worker.lock().unwrap().take();
-                (s.id.clone(), Arc::clone(&s.control))
-            }
-            None => return Err(anyhow!("没有正在进行的滚动截图")),
-        }
-    };
-    let _ = control;
-
-    // The worker observes the stop flag within one iteration (worst case a
-    // settle sleep); poll the result slot briefly instead of joining a handle
-    // we no longer own.
-    let mut result = None;
-    for _ in 0..100 {
-        result = control.result.lock().unwrap().take();
-        if result.is_some() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    // Tear down windows + restore overlay.
-    cancel(app);
-
-    let Some(finished) = result else {
-        return Err(anyhow!("拼接线程尚未结束，请重试"));
-    };
-    let stitcher = finished.stitcher;
-    let image = stitcher.finish();
-
-    if action == ScrollFinishAction::Cancel {
-        let _ = app.emit(
-            "scroll://done",
-            ScrollDone {
-                session_id: id.clone(),
-                ok: false,
-                width: image.width(),
-                height: image.height(),
-                message: None,
-                saved_path: None,
-            },
-        );
-        return Ok(ScrollDone {
-            session_id: id,
-            ok: false,
-            width: image.width(),
-            height: image.height(),
-            message: None,
-            saved_path: None,
-        });
-    }
-
-    // Encode the final PNG once.
-    let png = crate::compose::to_png(&image)?;
-
-    match action {
-        ScrollFinishAction::Save => {
-            let stamp = chrono::Local::now().format("%Y%m%d%H%M%S");
-            let default_name = format!("shutter-long-{stamp}.png");
-            let picked = native_save_dialog(&default_name)?;
-            let Some(target) = picked else {
-                // Cancelled the dialog: discard like the reference does.
-                let _ = app.emit(
-                    "scroll://done",
-                    ScrollDone {
-                        session_id: id.clone(),
-                        ok: false,
-                        width: image.width(),
-                        height: image.height(),
-                        message: None,
-                        saved_path: None,
-                    },
-                );
-                return Ok(ScrollDone {
-                    session_id: id,
-                    ok: false,
-                    width: image.width(),
-                    height: image.height(),
-                    message: None,
-                    saved_path: None,
-                });
-            };
-            let path = crate::output::save_png_at(&png, &target)?;
-            let done = ScrollDone {
-                session_id: id,
-                ok: true,
-                width: image.width(),
-                height: image.height(),
-                message: Some(format!("已保存到 {}", path.display())),
-                saved_path: Some(path.display().to_string()),
-            };
-            let _ = app.emit("scroll://done", &done);
-            Ok(done)
-        }
-        ScrollFinishAction::Copy => {
-            crate::output::copy_image(&png)?;
-            // Gallery auto-save mirrors the normal capture path: a long
-            // screenshot is a capture too, and the gallery is the record.
-            let settings = crate::settings::load_settings();
-            let mut message = "已复制到剪贴板".to_string();
-            if settings.auto_save {
-                if let Ok(dir) = crate::settings::save_dir(&settings) {
-                    if let Ok(path) = crate::output::save_png(&png, &dir) {
-                        message = format!("已复制到剪贴板；已存入图库 {}", path.display());
-                    }
-                }
-            }
-            let done = ScrollDone {
-                session_id: id,
-                ok: true,
-                width: image.width(),
-                height: image.height(),
-                message: Some(message),
-                saved_path: None,
-            };
-            let _ = app.emit("scroll://done", &done);
-            Ok(done)
-        }
-        ScrollFinishAction::Cancel => unreachable!("handled above"),
-    }
-}
-
-/// Native save dialog without going through the webview (same osascript
-/// approach as `commands::save_as_dialog`, inlined because the issuing webview
-/// may already be gone).
-fn native_save_dialog(default_name: &str) -> Result<Option<String>> {
-    #[cfg(target_os = "macos")]
-    {
-        let script = format!(
-            "POSIX path of (choose file name with prompt \"保存长截图\" default name \"{}\")",
-            default_name.replace('"', "\\\"")
-        );
-        let output = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .output()
-            .map_err(|e| anyhow!("无法打开保存对话框：{e}"))?;
-        if !output.status.success() {
-            return Ok(None); // user cancelled
-        }
-        let path = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .trim_matches('\'')
-            .to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-    #[cfg(target_os = "windows")]
-    {
-        // Same PowerShell dialog as `commands::save_as_dialog`: the control
-        // bar's Save button runs here without a webview round trip.
-        let script = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; \
-             $d = New-Object System.Windows.Forms.SaveFileDialog; \
-             $d.FileName = '{}'; $d.Filter = 'Image|*.png'; \
-             if ($d.ShowDialog() -eq 'OK') {{ $d.FileName }}",
-            default_name.replace('\'', "''")
-        );
-        let output = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .output()
-            .map_err(|e| anyhow!("无法打开保存对话框：{e}"))?;
-        if !output.status.success() {
-            return Ok(None); // user cancelled
-        }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = default_name;
-        Err(anyhow!("当前平台不支持另存为对话框"))
-    }
+    *control.result.lock().unwrap() = Some(stitcher);
 }

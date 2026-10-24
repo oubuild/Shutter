@@ -3,7 +3,8 @@ import ReactDOM from "react-dom/client";
 import { Overlay } from "./routes/Overlay";
 import { Pin } from "./routes/Pin";
 import { Chat } from "./routes/Chat";
-import { ScrollBar } from "./routes/ScrollBar";
+import { ScrollScreen } from "./routes/ScrollScreen";
+import { ScrollRenderBar } from "./routes/ScrollRenderBar";
 import { Main, type Tab } from "./routes/Main";
 import { installBootGuard, markMounted } from "./lib/boot-guard";
 import "./styles/capture.css";
@@ -27,8 +28,12 @@ function pickView(): React.ReactElement {
       return <Pin pinId={params.get("id") ?? ""} />;
     case "chat":
       return <Chat />;
+    case "scrollscreen":
+      // The long-screenshot fullscreen panel (`scroll_screenshot_panel_<id>`).
+      return <ScrollScreen />;
     case "scrollbar":
-      return <ScrollBar />;
+      // The long-screenshot control bar (`recorder_bar_panel`).
+      return <ScrollRenderBar />;
     case "main":
       return <Main initialTab={pickTab(params.get("tab"))} />;
     // The settings window was folded into `main`; keep the route so an old
@@ -228,7 +233,7 @@ function installIpcMock() {
     incoming.forEach((line, i) => ctx.fillText(line, 112, 186 + i * 34));
 
     // Reply bubble.
-    ctx.fillStyle = "#2563eb";
+    ctx.fillStyle = "#18181b";
     round(612, 330, 500, 120, 14);
     ctx.fill();
     ctx.fillStyle = "#ffffff";
@@ -256,7 +261,7 @@ function installIpcMock() {
     ctx.fillStyle = "#9aa0aa";
     ctx.font = `16px ${font}`;
     ctx.fillText("输入消息…", 112, 655);
-    ctx.fillStyle = "#2563eb";
+    ctx.fillStyle = "#18181b";
     round(1064, 620, 88, 56, 12);
     ctx.fill();
     ctx.fillStyle = "#ffffff";
@@ -293,193 +298,6 @@ function installIpcMock() {
     settings,
     emit: (event: string, payload: unknown) => emitEvent(event, payload),
     listenerCount: (event: string) => (listeners.get(event) ?? []).length,
-  };
-
-  /* --------------------------------------------- long screenshot (scroll) */
-
-  /**
-   * The mock's stand-in for the stitched image: a canvas data-URL of a tall
-   * gradient with repeating text lines, cached per height so the thumbnail
-   * visibly grows as `height` climbs. The mock IPC hands this out through
-   * `convertFileSrc` for the well-known preview path.
-   */
-  function scrollPreviewUrl(height: number): string {
-    const w = 600;
-    const h = Math.max(400, Math.round(height));
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (ctx === null) return "";
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, "#eef2f7");
-    grad.addColorStop(1, "#dfe7f2");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-    // Fixed header band, so the sticky-strip behaviour is visible too.
-    ctx.fillStyle = "#24262b";
-    ctx.fillRect(0, 0, w, 36);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = '600 15px -apple-system, "PingFang SC", sans-serif';
-    ctx.fillText("Shutter mock · 长截图预览", 16, 24);
-    ctx.fillStyle = "#4b5563";
-    ctx.font = '14px -apple-system, "PingFang SC", sans-serif';
-    let y = 64;
-    let line = 1;
-    while (y < h - 12) {
-      ctx.fillText(`第 ${line} 行 · 滚动拼接内容 (${Math.round(y)}px)`, 16, y);
-      y += 28;
-      line += 1;
-    }
-    return canvas.toDataURL("image/png");
-  }
-
-  const previewByHeight = new Map<number, string>();
-
-  /** Long-screenshot session state machine, mirroring the Rust worker. */
-  const scrollMock = {
-    sessionId: null as string | null,
-    phase: "idle" as "idle" | "armed" | "recording" | "paused" | "finished" | "failed",
-    height: 400,
-    width: 600,
-    timer: null as number | null,
-    previewPath: "mock-scroll-preview",
-
-    state() {
-      return {
-        sessionId: this.sessionId,
-        phase: this.phase,
-        height: this.phase === "idle" ? 0 : this.height,
-        width: this.phase === "idle" ? 0 : this.width,
-        autoScroll: true,
-        note: null as string | null,
-      };
-    },
-
-    publish() {
-      const height = this.height;
-      let url = previewByHeight.get(height);
-      if (url === undefined) {
-        url = scrollPreviewUrl(height);
-        previewByHeight.set(height, url);
-      }
-      // The overlay's convertFileSrc is the identity in the mock, so the
-      // preview component needs the data-URL under the well-known path.
-      const w = (window as unknown as { __scrollPreviewUrl?: string });
-      w.__scrollPreviewUrl = url;
-      emitEvent("scroll://preview", {
-        sessionId: this.sessionId,
-        path: this.previewPath,
-        width: this.width,
-        height,
-      });
-      emitEvent("scroll://state", this.state());
-    },
-
-    tick() {
-      this.height = Math.min(this.height + 220, 2600);
-      this.publish();
-      if (this.height >= 2600) {
-        this.finish("已到达页面底部");
-      }
-    },
-
-    start() {
-      this.stopTimer();
-      this.sessionId = "mock-scroll";
-      // Reference flow: the session starts armed (isStart) and only begins
-      // scrolling when the pointer enters the selection mask.
-      this.phase = "armed";
-      this.height = 400;
-      emitEvent("scroll://state", this.state());
-      return this.state();
-    },
-
-    /** Pointer entered the selection mask: begin scrolling. */
-    enter() {
-      if (this.phase === "armed") {
-        this.phase = "recording";
-        emitEvent("scroll://state", this.state());
-        this.stopTimer();
-        this.timer = window.setInterval(() => this.tick(), 700);
-      }
-      return this.state();
-    },
-
-    /** Pointer left the selection: park back in armed (timer stops). */
-    leave() {
-      if (this.phase === "recording") {
-        this.stopTimer();
-        this.phase = "armed";
-        emitEvent("scroll://state", this.state());
-      }
-      return this.state();
-    },
-
-    pause() {
-      this.stopTimer();
-      if (this.phase === "recording") {
-        this.phase = "paused";
-        emitEvent("scroll://state", this.state());
-      }
-      return this.state();
-    },
-
-    resume() {
-      if (this.phase === "paused") {
-        this.phase = "recording";
-        emitEvent("scroll://state", this.state());
-        this.stopTimer();
-        this.timer = window.setInterval(() => this.tick(), 700);
-      }
-      return this.state();
-    },
-
-    stopTimer() {
-      if (this.timer !== null) {
-        window.clearInterval(this.timer);
-        this.timer = null;
-      }
-    },
-
-    finish(message: string | null) {
-      this.stopTimer();
-      this.phase = "finished";
-      const done = {
-        sessionId: this.sessionId ?? "mock-scroll",
-        ok: message !== null ? message.includes("已") : true,
-        width: this.width,
-        height: this.height,
-        message: message ?? "已复制到剪贴板",
-        savedPath: null as string | null,
-      };
-      emitEvent("scroll://done", done);
-      this.sessionId = null;
-      this.phase = "idle";
-      this.height = 400;
-      return done;
-    },
-
-    stop(action: "save" | "copy" | "cancel") {
-      if (!this.sessionId) return null;
-      if (action === "cancel") {
-        this.stopTimer();
-        this.phase = "idle";
-        const done = {
-          sessionId: "mock-scroll",
-          ok: false,
-          width: this.width,
-          height: this.height,
-          message: null as string | null,
-          savedPath: null as string | null,
-        };
-        emitEvent("scroll://done", done);
-        this.sessionId = null;
-        this.height = 400;
-        return done;
-      }
-      return this.finish(action === "copy" ? "已复制到剪贴板" : null);
-    },
   };
 
   function emitEvent(event: string, payload: unknown) {
@@ -599,37 +417,6 @@ function installIpcMock() {
           case "cancel_capture":
             resolve(null);
             break;
-          /* ------------------------------------------------- scroll capture */
-          case "scroll_status":
-            resolve(scrollMock.state());
-            break;
-          case "scroll_start": {
-            const status = scrollMock.start();
-            resolve(status);
-            break;
-          }
-          case "scroll_enter": {
-            const status = scrollMock.enter();
-            resolve(status);
-            break;
-          }
-          case "scroll_leave":
-            resolve(scrollMock.leave());
-            break;
-          case "scroll_pause":
-            resolve(scrollMock.pause());
-            break;
-          case "scroll_resume":
-            resolve(scrollMock.resume());
-            break;
-          case "scroll_stop": {
-            const action = String(args.action ?? "cancel") as
-              | "save"
-              | "copy"
-              | "cancel";
-            resolve(scrollMock.stop(action));
-            break;
-          }
           case "ai_ask": {
             const requestId = String(args.requestId ?? "");
             const request = (args.request ?? {}) as { action?: string };
@@ -674,15 +461,7 @@ function installIpcMock() {
     unregisterCallback(id: number) {
       callbacks.delete(id);
     },
-    // The well-known mock preview path resolves to the growing data-URL the
-    // scroll mock republishes; every other path passes through untouched.
-    convertFileSrc: (path: string) => {
-      if (path === "mock-scroll-preview") {
-        const w = window as unknown as { __scrollPreviewUrl?: string };
-        return w.__scrollPreviewUrl ?? path;
-      }
-      return path;
-    },
+    convertFileSrc: (path: string) => path,
     metadata: { currentWindow: { label: "overlay-1" }, currentWebview: { label: "overlay-1" } },
   };
 
@@ -698,7 +477,6 @@ function installIpcMock() {
   // Test hook: replay an event the way Rust would (`ai://bind`, `ui://tab`, …).
   (window as unknown as { __emitTauriEvent: unknown }).__emitTauriEvent = emitEvent;
   (window as unknown as { __ipcMock: unknown }).__ipcMock = mock;
-  (window as unknown as { __scrollMock: unknown }).__scrollMock = scrollMock;
 }
 
 installIpcMock();

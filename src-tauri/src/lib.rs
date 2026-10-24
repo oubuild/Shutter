@@ -83,6 +83,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -238,15 +239,18 @@ pub fn run() {
             commands::close_pin,
             commands::save_crop,
             commands::crop_data_url,
-            commands::pin_crop,
-            commands::scroll_start,
-            commands::scroll_pause,
-            commands::scroll_resume,
-            commands::scroll_stop,
-            commands::scroll_status,
-            commands::scroll_enter,
-            commands::scroll_leave,
-        ])
+                commands::pin_crop,
+                commands::open_scroll_screenshot_event,
+                commands::scroll_screenshot_panel_loaded_event,
+                commands::drawn_scroll_screenshot_event,
+                commands::start_scroll_screenshot_event,
+                commands::scroll_screenshot_bar_panel_loaded,
+                commands::cancel_scroll_screenshot_event,
+                commands::save_scroll_screenshot,
+                commands::screenshot_crop_event,
+                commands::hide_scroll_screenshot_panel,
+                commands::close_panel,
+            ])
         .build(tauri::generate_context!())
         .expect("error while building Shutter")
         .run(|_app, event| {
@@ -256,7 +260,7 @@ pub fn run() {
                     // A scroll session owns threads and windows; stop it
                     // before deciding, so ExitRequested from its teardown
                     // cannot recurse.
-                    crate::scroll::cancel(_app);
+                    crate::scroll::teardown(_app);
                     api.prevent_exit();
                 }
             }

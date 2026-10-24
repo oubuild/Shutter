@@ -61,6 +61,16 @@ pub fn displays() -> Result<Vec<Display>> {
     Ok(out)
 }
 
+/// Find one display by id. Callers that capture repeatedly (the scroll
+/// worker) should resolve this once on their own thread and reuse the
+/// `Display`, so the per-frame path never re-enumerates monitors.
+pub fn find_display(id: u32) -> Result<Display> {
+    displays()?
+        .into_iter()
+        .find(|d| d.info.id == id)
+        .ok_or_else(|| anyhow::anyhow!("显示器 {id} 不可用"))
+}
+
 /// Enumerate the displays and capture every one, returning plain data only.
 ///
 /// The live `xcap::Monitor` handles are created and dropped inside this

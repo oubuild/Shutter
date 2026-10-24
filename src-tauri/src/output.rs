@@ -64,6 +64,35 @@ pub fn save_png_at(png: &[u8], target: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Encode a PNG with fast settings. The default compression spends seconds on
+/// a 5MP frame in a debug build; the capture path (frozen frames for the
+/// overlay) and the scroll preview re-encode constantly and only need the
+/// bytes, not a small file.
+pub fn encode_png_fast(image: &RgbaImage) -> Result<Vec<u8>> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    use image::ImageEncoder;
+    let mut buf = Vec::new();
+    PngEncoder::new_with_quality(&mut buf, CompressionType::Fast, FilterType::NoFilter)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .context("encode png (fast)")?;
+    Ok(buf)
+}
+
+/// Write-then-rename so a crash or a concurrent reader can never observe a
+/// half-written file (shared by settings.json and the scroll preview swap).
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// Small PNG data URL so the UI can show the result without another IPC round-trip.
 pub fn data_url(png: &[u8]) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine as _};

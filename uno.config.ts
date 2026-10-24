@@ -18,9 +18,27 @@ import { defineConfig, presetWind3 } from "unocss";
 export default defineConfig({
   presets: [
     presetAnthonyDesign({
-      // Brand blue per the Shutter AI visual spec (#2563EB); the preset
-      // generates the primary-500/600/… scale from it.
-      primary: "#2563eb",
+      // shadcn/ui zinc palette. The primary action colour is zinc-900
+      // (#18181b) with a zinc-800 (#27272a) hover — shadcn lightens its
+      // near-black primary on hover (bg-primary/90), so 600 is deliberately
+      // one step lighter rather than darker. A full scale object is passed
+      // (not a hex) because generateColorRamp re-steps lightness and would
+      // turn a near-black input into a mid-gray primary-500. Remaining stops
+      // follow the zinc ramp for tints.
+      primary: {
+        50: "#fafafa",
+        100: "#f4f4f5",
+        200: "#e4e4e7",
+        300: "#d4d4d8",
+        400: "#a1a1aa",
+        500: "#18181b",
+        600: "#27272a",
+        700: "#3f3f46",
+        800: "#52525b",
+        900: "#71717a",
+        950: "#09090b",
+        DEFAULT: "#18181b",
+      },
       // The shipped action button uses a 13%-alpha border, which reads as plain
       // text on the white cards this app is built from. One step stronger keeps
       // the antfu vocabulary but restores the button affordance.
@@ -62,8 +80,6 @@ input, textarea, select { font: inherit; color: inherit; }
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.34); background-clip: content-box; border: 2px solid transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
-@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-@keyframes toast-out { to { opacity: 0; } }
 @keyframes thumb-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
 `,
     },

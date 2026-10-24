@@ -7,7 +7,6 @@
 
 use crate::types::{GalleryItem, Settings};
 use anyhow::{anyhow, Context, Result};
-use image::RgbaImage;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -240,7 +239,7 @@ pub fn thumbnail_in(cache_root: &Path, settings: &Settings, candidate: &str) -> 
     let image = image::open(&path)
         .with_context(|| format!("decode {}", path.display()))?
         .to_rgba8();
-    let small = resize_to_fit(&image, THUMB_MAX_SIDE);
+    let small = crate::output::thumbnail(&image, THUMB_MAX_SIDE);
     let mut buf = std::io::Cursor::new(Vec::new());
     small
         .write_to(&mut buf, image::ImageFormat::Png)
@@ -252,19 +251,6 @@ pub fn thumbnail_in(cache_root: &Path, settings: &Settings, candidate: &str) -> 
         log::warn!("cache thumbnail {}: {e}", cache.display());
     }
     Ok(bytes)
-}
-
-/// Scale `image` so its longest side is at most `max_side`, never upscaling.
-fn resize_to_fit(image: &RgbaImage, max_side: u32) -> RgbaImage {
-    let (w, h) = image.dimensions();
-    let longest = w.max(h);
-    if longest <= max_side {
-        return image.clone();
-    }
-    let ratio = max_side as f32 / longest as f32;
-    let nw = (w as f32 * ratio).round().max(1.0) as u32;
-    let nh = (h as f32 * ratio).round().max(1.0) as u32;
-    image::imageops::resize(image, nw, nh, image::imageops::FilterType::Triangle)
 }
 
 /// Delete one screenshot and its cached thumbnail.
@@ -290,7 +276,7 @@ pub fn delete_in(cache_root: &Path, settings: &Settings, candidate: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::Rgba;
+    use image::{Rgba, RgbaImage};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -44,10 +44,8 @@ pub fn load_settings() -> Settings {
 pub fn save_settings(settings: &Settings) -> Result<()> {
     let path = settings_path()?;
     let text = serde_json::to_string_pretty(settings)?;
-    // Write-then-rename so a crash cannot truncate the file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("rename into {}", path.display()))?;
+    crate::output::atomic_write(&path, text.as_bytes())
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 

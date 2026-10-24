@@ -1,17 +1,12 @@
 //! Incremental stitching of accepted frames into the accumulated long image.
 //!
 //! Mirrors the reference `image_stitcher` + `compute_top`: frames are appended
-//! onto a growing buffer at the estimated offset, with a seam search over the
-//! overlap (reference `seam::overlap_seam_cost`) and sticky-region (fixed
-//! header/footer) removal (reference `margins::detect_fixed_margins` +
-//! `stitch_incremental_with_fixed_margins`).
+//! onto a growing buffer at the estimated (and verifier-gated) offset, with
+//! sticky-region (fixed header/footer) removal (reference
+//! `margins::detect_fixed_margins` + `stitch_incremental_with_fixed_margins`).
 
 use crate::scroll::pipeline::FrameDecision;
 use image::{imageops, RgbaImage};
-
-/// How many rows each side of the seam the cost search spans (reference
-/// `seam::row_diff` searches ±2px around the candidate alignment).
-const SEAM_SEARCH: i32 = 2;
 
 /// A run of rows that is byte-identical between consecutive frames near the
 /// same y position across ≥ this many frames is treated as a fixed bar.
@@ -111,52 +106,13 @@ impl Stitcher {
         }
     }
 
-    /// Seam cost: mean row diff of the overlap under candidate shift
-    /// (reference `seam::overlap_seam_cost`).
-    fn seam_cost(
-        accumulated: &RgbaImage,
-        frame: &RgbaImage,
-        frame_y_start: u32,
-        take: u32,
-        shift: i32,
-    ) -> f64 {
-        let h = accumulated.height() as i32;
-        let y0 = (h - take as i32 + shift).max(0) as u32;
-        let y1 = y0 + take;
-        if y1 > accumulated.height() {
-            return f64::MAX;
-        }
-        let fy0 = frame_y_start as i32 - shift;
-        if fy0 < 0 || fy0 + take as i32 > frame.height() as i32 {
-            return f64::MAX;
-        }
-        let mut acc = 0f64;
-        let mut n = 0f64;
-        let step = (take / 32).max(1);
-        let mut dy = 0u32;
-        while dy < take {
-            for x in (0..accumulated.width()).step_by(4) {
-                let a = accumulated.get_pixel(x, y0 + dy);
-                let b = frame.get_pixel(x, fy0 as u32 + dy);
-                acc += (a.0[0] as i64 - b.0[0] as i64).abs() as f64
-                    + (a.0[1] as i64 - b.0[1] as i64).abs() as f64
-                    + (a.0[2] as i64 - b.0[2] as i64).abs() as f64;
-                n += 3.0;
-            }
-            dy += step;
-        }
-        if n == 0.0 {
-            f64::MAX
-        } else {
-            acc / n
-        }
-    }
-
     /// Append a frame at the estimated offset. Returns the rows actually added.
     ///
     /// Geometry (same as the pipeline's): the frame's top `fh − offset` rows
     /// duplicate content already accumulated; only its bottom `offset` rows
-    /// are new. The seam sits at the accumulated image's current height.
+    /// are new. The split sits at the verifier-gated offset; no seam search is
+    /// re-run here (the reference's `seam::overlap_seam_cost` only guards
+    /// against ±1px rounding, which the verifier already covers).
     pub fn append(&mut self, frame: RgbaImage, decision: &FrameDecision, offset: i64) -> u32 {
         let FrameDecision::Append { .. } = decision else {
             return 0;
@@ -166,23 +122,6 @@ impl Stitcher {
         let fh = frame.height() as i64;
         // Rows of the frame that re-show existing content.
         let overlap = (fh - offset).max(0);
-
-        // Seam search: adjust the split point by the cheapest alignment
-        // within ±SEAM_SEARCH px (reference `seam::overlap_seam_cost`).
-        let take = overlap as u32;
-        if take > 0 {
-            let mut best_cost = f64::MAX;
-            let mut best_shift = 0i32;
-            for shift in -SEAM_SEARCH..=SEAM_SEARCH {
-                let cost = Self::seam_cost(&self.image, &frame, 0, take, shift);
-                if cost < best_cost {
-                    best_cost = cost;
-                    best_shift = shift;
-                }
-            }
-            let _ = best_shift; // the split already sits at the verified offset;
-                                // the search only guards against rounding.
-        }
 
         // Copy the genuinely new rows below the accumulated image.
         let y_from = overlap.max(0) as u32;

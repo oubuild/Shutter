@@ -109,57 +109,36 @@ export type GalleryItem = {
 
 /* -------------------------------------------------------- long screenshot */
 
-/** Which phase a scroll-capture session is in.
+/** Payload of `open_scroll_screenshot_event` (reference `scrollScreen` chunk).
  *
- * `armed` mirrors the reference `isStart` window: the session exists but
- * scrolling waits for the pointer to enter the selection.
+ * Sent by the screenshot overlay 100ms after it closes itself: Rust builds
+ * the `scroll_screenshot_panel_<monitorId>` fullscreen window seeded with
+ * these CSS-pixel selection bounds.
  */
-export type ScrollPhase = "idle" | "armed" | "recording" | "paused" | "finished" | "failed";
-
-/** Live state of the scroll-capture session, pushed via `scroll://state`. */
-export type ScrollStatus = {
-  sessionId: string | null;
-  phase: ScrollPhase;
-  /** Total height of the stitched image, in physical px. */
-  height: number;
-  /** Selection width/height in physical px. */
-  width: number;
-  /** Whether the auto-scroller is injecting wheel events (vs manual mode). */
-  autoScroll: boolean;
-  /** Why the auto-scroller stopped, in user-facing Chinese. */
-  note: string | null;
+export type OpenScrollScreenshot = {
+  x: number;
+  y: number;
+  boundsWidth: number;
+  boundsHeight: number;
+  monitorIds: number;
+  selectionScaleFactor: number;
 };
 
-/** Result of finishing a scroll capture, via `scroll://done`. */
-export type ScrollDone = {
-  sessionId: string;
-  ok: boolean;
-  /** Stitched dimensions in physical px. */
+/** Initial data Rust pushes into the scroll panel (`scroll_screenshot_data`). */
+export type ScrollScreenshotData = {
   width: number;
   height: number;
-  message: string | null;
-  savedPath: string | null;
+  monitorId: number;
+  boundsWidth: number;
+  boundsHeight: number;
+  x: number;
+  y: number;
+  selectionScaleFactor: number;
 };
 
-/** Preview update payload, via `scroll://preview`. */
-export type ScrollPreview = {
-  sessionId: string;
-  /** Atomic-replaced PNG of the stitched image so far. */
-  path: string;
-  width: number;
-  height: number;
-};
-
-/** Transient hint shown over the selection, via `scroll://tip`. */
-export type ScrollTip = {
-  sessionId: string;
-  /** Kind selects styling/urgency, matching the reference's state machine. */
-  kind: "info" | "warn" | "error" | "bottom";
-  text: string;
-};
-
-/** How `scroll_stop` should dispose of the stitched image. */
-export type ScrollFinishAction = "save" | "copy" | "cancel";
+/** How `save_scroll_screenshot` should dispose of the stitched image
+ * (reference `actionType`: "copy" | "saveAs"). */
+export type ScrollSaveAction = "copy" | "saveAs";
 
 export const api = {
   captureScreens: () => invoke<CaptureSession>("capture_screens"),
@@ -233,18 +212,83 @@ export const api = {
   cropDataUrl: (cropId: string) => invoke<string>("crop_data_url", { cropId }),
   pinCrop: (cropId: string) => invoke<void>("pin_crop", { cropId }),
   closePin: (pinId: string) => invoke<void>("close_pin", { pinId }),
-  /* Long screenshot (scroll stitching). */
-  scrollStart: (monitorId: number, rect: Rect) =>
-    invoke<ScrollStatus>("scroll_start", { monitorId, rect }),
-  scrollPause: () => invoke<ScrollStatus>("scroll_pause"),
-  scrollResume: () => invoke<ScrollStatus>("scroll_resume"),
-  scrollStop: (action: ScrollFinishAction) =>
-    invoke<ScrollDone | null>("scroll_stop", { action }),
-  scrollStatus: () => invoke<ScrollStatus>("scroll_status"),
-  /** Pointer entered the selection: begin the inject/capture cycle. */
-  scrollEnter: () => invoke<ScrollStatus>("scroll_enter"),
-  /** Pointer left the selection: park the session back in armed. */
-  scrollLeave: () => invoke<ScrollStatus>("scroll_leave"),
+  /* Long screenshot (scroll stitching) — reference command surface. */
+  /** Overlay → Rust: build the scroll panel for this selection. */
+  openScrollScreenshot: (payload: OpenScrollScreenshot) =>
+    invoke<void>("open_scroll_screenshot_event", {
+      x: payload.x,
+      y: payload.y,
+      boundsWidth: payload.boundsWidth,
+      boundsHeight: payload.boundsHeight,
+      monitorIds: payload.monitorIds,
+      selectionScaleFactor: payload.selectionScaleFactor,
+    }),
+  /** Scroll panel → Rust: mount handshake (reply re-sends the seed data). */
+  scrollPanelLoaded: () => invoke<void>("scroll_screenshot_panel_loaded_event"),
+  /** Scroll panel → Rust: the selection is drawn; capture can begin. */
+  drawnScrollScreenshot: () => invoke<void>("drawn_scroll_screenshot_event"),
+  /** Scroll panel → Rust: begin scrolling+stitching (1000ms armed beat,
+   *  then 1500ms capture arm, exactly the reference timers). */
+  startScrollScreenshot: (payload: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleFactor: number;
+  }) =>
+    invoke<void>("start_scroll_screenshot_event", {
+      x: payload.x,
+      y: payload.y,
+      width: payload.width,
+      height: payload.height,
+      scaleFactor: payload.scaleFactor,
+    }),
+  /** Control bar → Rust: mount handshake (disarms the watchdog). */
+  scrollBarLoaded: () => invoke<void>("scroll_screenshot_bar_panel_loaded"),
+  /** Control bar / panel → Rust: pause or resume the auto-scroller
+   *  (`isCancelScroll` is really "stop scrolling" in the reference). */
+  cancelScrollScreenshot: (isCancelScroll: boolean) =>
+    invoke<void>("cancel_scroll_screenshot_event", { isCancelScroll }),
+  /** Control bar → Rust: finish and dispose of the stitched image.
+   *  `monitorId` is the stale-bar guard; null skips it. */
+  saveScrollScreenshot: (payload: {
+    monitorId: number | null;
+    actionType: ScrollSaveAction;
+    filePath: string;
+    autoSavePath: string;
+  }) =>
+    invoke<void>("save_scroll_screenshot", {
+      monitorId: payload.monitorId,
+      actionType: payload.actionType,
+      filePath: payload.filePath,
+      autoSavePath: payload.autoSavePath,
+    }),
+  /** Scroll panel → Rust: live crop of the selection (下载/保存 before
+   *  recording starts — reference `screenshot_crop_event`). */
+  screenshotCrop: (payload: {
+    monitorId: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    actionType: ScrollSaveAction;
+    filePath: string;
+    autoSavePath: string;
+  }) =>
+    invoke<void>("screenshot_crop_event", {
+      monitorId: payload.monitorId,
+      x: payload.x,
+      y: payload.y,
+      width: payload.width,
+      height: payload.height,
+      actionType: payload.actionType,
+      filePath: payload.filePath,
+      autoSavePath: payload.autoSavePath,
+    }),
+  /** Panel → Rust: teardown without an image (hide + close). */
+  hideScrollScreenshotPanel: () => invoke<void>("hide_scroll_screenshot_panel"),
+  /** Reference generic: close one window by label. */
+  closePanel: (label: string) => invoke<void>("close_panel", { label }),
 };
 
 export const events = {
@@ -261,15 +305,42 @@ export const events = {
   /** Fired when the tray wants a specific control focused (e.g. shortcuts). */
   onUiFocus: (cb: (target: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://focus", (e) => cb(e.payload)),
-  /* Long screenshot events. */
-  onScrollState: (cb: (s: ScrollStatus) => void): Promise<UnlistenFn> =>
-    listen<ScrollStatus>("scroll://state", (e) => cb(e.payload)),
-  onScrollPreview: (cb: (p: ScrollPreview) => void): Promise<UnlistenFn> =>
-    listen<ScrollPreview>("scroll://preview", (e) => cb(e.payload)),
-  onScrollTip: (cb: (t: ScrollTip) => void): Promise<UnlistenFn> =>
-    listen<ScrollTip>("scroll://tip", (e) => cb(e.payload)),
-  onScrollDone: (cb: (d: ScrollDone) => void): Promise<UnlistenFn> =>
-    listen<ScrollDone>("scroll://done", (e) => cb(e.payload)),
+  /* Long screenshot events (reference names, emitted by Rust). */
+  /** Rust → panel: initial window geometry + selection bounds. */
+  onScrollScreenshotData: (cb: (d: ScrollScreenshotData) => void): Promise<UnlistenFn> =>
+    listen<ScrollScreenshotData>("scroll_screenshot_data", (e) => cb(e.payload)),
+  /** Rust → panel: full teardown (right-click quit / Escape). */
+  onScrollScreenClear: (cb: () => void): Promise<UnlistenFn> =>
+    listen("scroll_screen_clear", () => cb()),
+  /** Rust → panel: stitching failed; show the error pill for 3s. */
+  onScrollScreenshotError: (cb: (e: { message: string }) => void): Promise<UnlistenFn> =>
+    listen<{ message: string }>("scroll_screenshot_error", (e) => cb(e.payload)),
+  /** Rust → panel: the image window is up (panel becomes click-through). */
+  onScrollScreenshotDrawn: (cb: () => void): Promise<UnlistenFn> =>
+    listen("scroll_screenshot_drawn", () => cb()),
+  /** Rust → panel: toggle the armed (将鼠标移入…) state. */
+  onShowScrollTip: (cb: (on: boolean) => void): Promise<UnlistenFn> =>
+    listen<boolean>("show_scroll_tip", (e) => cb(e.payload)),
+  /** Rust → panel: stitching stopped; restore the window's cursor events. */
+  onScrollScreenshotClickStop: (cb: () => void): Promise<UnlistenFn> =>
+    listen("scroll_screenshot_click_stop", () => cb()),
+  /** Rust → panel: the accumulated image PNG was replaced; re-read it. */
+  onScrollImageUpdate: (
+    cb: (e: { path: string }) => void,
+  ): Promise<UnlistenFn> =>
+    listen<{ path: string }>("scroll_screenshot_image_update_event", (e) =>
+      cb(e.payload),
+    ),
+  /** Rust → bar: which monitor's session is live (reference `monitor_id`). */
+  onStartScreenRecording: (
+    cb: (e: { monitor_id: number }) => void,
+  ): Promise<UnlistenFn> =>
+    listen<{ monitor_id: number }>("start_screen_recording_event", (e) =>
+      cb(e.payload),
+    ),
+  /** Rust → control bar: pause state flipped (停止滚动/继续滚动). */
+  onScrollPauseState: (cb: (paused: boolean) => void): Promise<UnlistenFn> =>
+    listen<boolean>("scroll_screenshot_pause_state", (e) => cb(e.payload)),
 };
 
 /** Errors from Rust arrive as strings; normalise them for display. */

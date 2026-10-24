@@ -1,9 +1,9 @@
 /** Floating toolbar docked to the selection.
  *
  * Icon-only, matching the reference chrome: a 44px bar with 36x36 hit targets,
- * 8px radius, 8px gaps, dividers between groups, and `#1b77ff` for the active
- * tool. Every control carries a `title` so name and shortcut stay discoverable
- * on hover.
+ * 8px radius, 8px gaps, dividers between groups, and the shadcn/ui zinc
+ * primary for the active tool. Every control carries a `title` so name and
+ * shortcut stay discoverable on hover.
  *
  * Parameters follow the reference model (`.tmp/analysis/toolbar-diff.md` §D2b):
  * the bar itself has **no** persistent colour chip, width slider or fill toggle.
