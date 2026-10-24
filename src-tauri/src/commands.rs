@@ -444,7 +444,8 @@ pub fn open_settings_window(app: AppHandle) -> std::result::Result<(), String> {
     windows::open_settings(&app).map_err(|e| format!("{e:#}"))
 }
 
-/// Open the main window (gallery + settings + about) on the requested tab.
+/// Open the main window on the requested tab (`gallery` / `ai` / `general` /
+/// `shortcuts` / `about`).
 #[tauri::command]
 pub fn open_main_window(app: AppHandle, tab: Option<String>) -> std::result::Result<(), String> {
     windows::open_main(&app, tab.as_deref().unwrap_or("gallery"))

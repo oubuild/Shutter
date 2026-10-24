@@ -12,7 +12,7 @@
  * On Windows/Linux the native title bar already provides the app title and the
  * drag behaviour, so the custom header is not rendered there.
  *
- * All three panes stay mounted and are hidden with `hidden`; switching tabs is
+ * All panes stay mounted and are hidden with `hidden`; switching tabs is
  * therefore a paint, not a remount. That keeps the gallery thumbnails, the
  * settings form state and every scroll position, and it removes the flash of
  * "加载中…" a remount used to show on every switch.
@@ -23,37 +23,54 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { events } from "../lib/ipc";
 import { IS_MAC } from "../lib/shortcut";
 import { Gallery } from "./Gallery";
-import { SettingsView } from "./Settings";
+import { SettingsView, type SettingsSection } from "./Settings";
 import { About } from "./About";
 
-export type Tab = "gallery" | "settings" | "about";
+export type Tab = "gallery" | SettingsSection | "about";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "gallery", label: "图库" },
-  { id: "settings", label: "设置" },
+  { id: "ai", label: "AI 服务" },
+  { id: "general", label: "通用" },
+  { id: "shortcuts", label: "快捷键" },
   { id: "about", label: "关于" },
 ];
 
+/** The three settings tabs render one shared SettingsView (see Settings.tsx). */
+function isSettingsTab(tab: Tab): tab is SettingsSection {
+  return tab === "ai" || tab === "general" || tab === "shortcuts";
+}
+
 function isTab(value: string | null): value is Tab {
-  return value === "gallery" || value === "settings" || value === "about";
+  return (
+    value === "gallery" ||
+    value === "about" ||
+    (value !== null && isSettingsTab(value as Tab))
+  );
 }
 
 export function Main({ initialTab }: { initialTab: Tab }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   /**
    * Panes are mounted on first visit and then kept alive, so switching is a
-   * paint and form/scroll state survives. Mounting all three at launch instead
+   * paint and form/scroll state survives. Mounting all panes at launch instead
    * would make the gallery load thumbnails in the background while the user is
    * still on another tab, which is what made startup feel heavy.
+   *
+   * The three settings tabs share the single "settings" slot: they are one
+   * SettingsView whose `section` prop swaps, never a remount.
    */
-  const [mounted, setMounted] = useState<Record<Tab, boolean>>({
+  const [mounted, setMounted] = useState<Record<"gallery" | "settings" | "about", boolean>>({
     gallery: initialTab === "gallery",
-    settings: initialTab === "settings",
+    settings: isSettingsTab(initialTab),
     about: initialTab === "about",
   });
 
   useEffect(() => {
-    setMounted((prev) => (prev[tab] ? prev : { ...prev, [tab]: true }));
+    setMounted((prev) => {
+      const key = isSettingsTab(tab) ? "settings" : tab;
+      return prev[key] ? prev : { ...prev, [key]: true };
+    });
   }, [tab]);
 
   // The tray reopens the existing window and steers it through this event, so
@@ -125,8 +142,11 @@ export function Main({ initialTab }: { initialTab: Tab }) {
               </div>
             )}
             {mounted.settings && (
-              <div className={tab === "settings" ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
-                <SettingsView active={tab === "settings"} />
+              <div className={isSettingsTab(tab) ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
+                <SettingsView
+                  section={isSettingsTab(tab) ? tab : "ai"}
+                  active={isSettingsTab(tab)}
+                />
               </div>
             )}
             {mounted.about && (

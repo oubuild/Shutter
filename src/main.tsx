@@ -18,7 +18,15 @@ import "virtual:uno.css";
  * avoid pulling in a router for five static screens.
  */
 function pickTab(value: string | null): Tab {
-  return value === "settings" || value === "about" ? value : "gallery";
+  // "settings" is the pre-split name; old window URLs still land on the AI pane.
+  if (value === "settings") return "ai";
+  return value === "gallery" ||
+    value === "about" ||
+    value === "ai" ||
+    value === "general" ||
+    value === "shortcuts"
+    ? value
+    : "gallery";
 }
 
 function pickView(): React.ReactElement {
@@ -39,7 +47,7 @@ function pickView(): React.ReactElement {
     // The settings window was folded into `main`; keep the route so an old
     // window URL (or a bookmarked dev URL) still renders something sensible.
     case "settings":
-      return <Main initialTab="settings" />;
+      return <Main initialTab="ai" />;
     case "overlay":
     default:
       return <Overlay monitorId={Number(params.get("monitor") ?? 0)} />;

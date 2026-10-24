@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   errorText,
-  events,
   type ConnectionReport,
   type Preset,
   type Settings,
@@ -17,13 +16,18 @@ import {
   IconImage,
   IconKey,
   IconKeyboard,
+  IconOverlay,
   IconRefresh,
   IconSparkles,
 } from "../components/Icons";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
 
 /**
- * Settings section of the main window.
+ * Settings area of the main window, split across three nav tabs — AI 服务,
+ * 通用, 快捷键 — that share this one component instance and therefore one
+ * form: separate instances would hold stale snapshots of the same Settings
+ * object, and a save from one pane could silently overwrite edits made in
+ * another. Switching tabs only re-renders the cards for the new `section`.
  *
  * Three rules shape this file:
  *
@@ -37,7 +41,9 @@ import { ShortcutRecorder } from "../components/ShortcutRecorder";
  * 3. The presentation is a macOS preferences pane: grouped white cards, rows
  *    with the label on the left and the control on the right, hairline
  *    dividers. There is no page-level "save" in a real preferences pane, so the
- *    footer carries the dirty state instead of hiding it in a toast.
+ *    footer carries the dirty state instead of hiding it in a toast — scoped to
+ *    the fields the visible section shows, while the button always persists
+ *    the whole form.
  */
 
 /** A form field is verified only while the values it was tested with still match. */
@@ -67,12 +73,22 @@ function viaLabel(via: ConnectionReport["via"]): string | null {
   return null;
 }
 
+/** Which nav tab is showing: decides the cards rendered and the dirty scope. */
+export type SettingsSection = "ai" | "general" | "shortcuts";
+
+const SECTION_TITLES: Record<SettingsSection, string> = {
+  ai: "AI 服务",
+  general: "通用",
+  shortcuts: "快捷键",
+};
+
 type Props = {
+  section: SettingsSection;
   /** True while this pane is the visible one; gates window-level shortcuts. */
   active?: boolean;
 };
 
-export function SettingsView({ active = true }: Props) {
+export function SettingsView({ section, active = true }: Props) {
   const [form, setForm] = useState<Settings | null>(null);
   /** The persisted values, for the dirty check in the footer. */
   const [initial, setInitial] = useState<Settings | null>(null);
@@ -93,10 +109,8 @@ export function SettingsView({ active = true }: Props) {
   const [verification, setVerification] = useState<Verification | null>(null);
   const [confirmSave, setConfirmSave] = useState(false);
   const [recordingShortcut, setRecordingShortcut] = useState(false);
-  const [highlightShortcuts, setHighlightShortcuts] = useState(false);
 
   const keyRef = useRef<HTMLInputElement | null>(null);
-  const shortcutCardRef = useRef<HTMLElement | null>(null);
   const recordingRef = useRef(false);
   recordingRef.current = recordingShortcut;
 
@@ -159,20 +173,30 @@ export function SettingsView({ active = true }: Props) {
     );
   }, [form, initial, keyInput]);
 
-  /** Any field differs from the persisted snapshot, key included. */
+  /**
+   * Any field of the visible section differs from the persisted snapshot, key
+   * included. The footer only reports what the current tab can show; the save
+   * button still persists the whole form.
+   */
   const dirty = useMemo(() => {
     if (!form || !initial) return false;
+    if (section === "shortcuts") {
+      return form.captureShortcut.trim() !== initial.captureShortcut.trim();
+    }
+    if (section === "general") {
+      return (
+        (form.saveDir ?? "") !== (initial.saveDir ?? "") ||
+        form.autoSave !== initial.autoSave ||
+        form.copyAfterCapture !== initial.copyAfterCapture
+      );
+    }
     if (keyInput.trim() !== "") return true;
     return (
       form.baseUrl.trim() !== initial.baseUrl.trim() ||
       form.model.trim() !== initial.model.trim() ||
-      form.translateLang.trim() !== initial.translateLang.trim() ||
-      (form.saveDir ?? "") !== (initial.saveDir ?? "") ||
-      form.autoSave !== initial.autoSave ||
-      form.copyAfterCapture !== initial.copyAfterCapture ||
-      form.captureShortcut.trim() !== initial.captureShortcut.trim()
+      form.translateLang.trim() !== initial.translateLang.trim()
     );
-  }, [form, initial, keyInput]);
+  }, [form, initial, keyInput, section]);
 
   /** The preset whose endpoint + model the form currently sits on, if any. */
   const activePreset = useMemo(() => {
@@ -361,29 +385,6 @@ export function SettingsView({ active = true }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let alive = true;
-    events
-      .onUiFocus((target) => {
-        if (target !== "shortcuts") return;
-        const card = shortcutCardRef.current;
-        if (!card) return;
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-        setHighlightShortcuts(true);
-        window.setTimeout(() => setHighlightShortcuts(false), 1400);
-      })
-      .then((fn) => {
-        if (alive) unlisten = fn;
-        else fn();
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, []);
-
   const report = verification?.report ?? null;
   // A result for values that have since been edited is worse than no result:
   // it would look like the current form had been checked.
@@ -411,7 +412,9 @@ export function SettingsView({ active = true }: Props) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="settings-pane">
       <header className="flex-none px-5 pt-5 pb-4">
-        <h1 className="m-0 text-xl font-600 tracking-tight color-base">设置</h1>
+        <h1 className="m-0 text-xl font-600 tracking-tight color-base">
+          {SECTION_TITLES[section]}
+        </h1>
         <p className="mt-1 mb-0 text-compact color-faint">
           改动在点击「保存」后生效
         </p>
@@ -427,431 +430,450 @@ export function SettingsView({ active = true }: Props) {
             </div>
           ) : (
             <>
-              <section className="app-card" data-testid="pref-card" aria-labelledby="pref-ai-title">
-                <div className="app-card-head">
-                  <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                    <IconSparkles size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <h2 id="pref-ai-title" className="m-0 text-compact font-600 color-base">
-                      AI 服务
-                    </h2>
-                    <p className="m-0 mt-0.5 text-mini color-faint">
-                      端点、模型与连接测试
-                    </p>
-                  </div>
-                  <div className="ml-auto flex min-w-0 max-w-[52%] items-center justify-end gap-2">
-                    {verified && (
-                      <span className="badge badge-color-green" title="当前配置已通过连接测试">
-                        <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
-                        已验证
+              {section === "ai" && (
+                <>
+                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-ai-title">
+                    <div className="app-card-head">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
+                        <IconSparkles size={15} />
                       </span>
-                    )}
-                    <span className="app-meta" title={form.baseUrl}>
-                      {hostOf(form.baseUrl)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="preset">
-                    快速选择
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <div className="relative">
-                      <select
-                        id="preset"
-                        className="app-field cursor-pointer appearance-none pr-8"
-                        value={activePreset?.label ?? ""}
-                        onChange={(e) => {
-                          const next = presets.find((p) => p.label === e.target.value);
-                          if (next) applyPreset(next);
-                        }}
-                      >
-                        <option value="">自定义端点</option>
-                        {presets.map((p) => (
-                          <option key={p.label} value={p.label}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 color-faint">
-                        ▾
-                      </span>
-                    </div>
-                    <p className="app-hint">
-                      {activePreset
-                        ? `${activePreset.model} · ${activePreset.note}`
-                        : "选择预设自动填入地址与模型，也可在下方手填任意兼容端点。"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="base-url">
-                    服务地址
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <input
-                      id="base-url"
-                      className="app-field"
-                      type="text"
-                      value={form.baseUrl}
-                      placeholder="https://api.deepseek.com"
-                      spellCheck={false}
-                      onChange={(e) => update("baseUrl", e.target.value)}
-                    />
-                    <p className="app-hint">
-                      兼容 OpenAI 接口的服务均可使用；请求时会自动拼接
-                      /chat/completions。
-                    </p>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="model">
-                    模型
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <div className="flex items-center gap-2">
-                      <input
-                        id="model"
-                        className="app-field flex-1"
-                        type="text"
-                        list="model-options"
-                        value={form.model}
-                        placeholder="deepseek-flash"
-                        spellCheck={false}
-                        autoComplete="off"
-                        onChange={(e) => update("model", e.target.value)}
-                      />
-                      <datalist id="model-options">
-                        {models.map((id) => (
-                          <option key={id} value={id} />
-                        ))}
-                      </datalist>
-                      <button
-                        type="button"
-                        className="grid h-8 w-8 flex-none place-items-center rounded-md border border-neutral-300 color-muted transition hover:bg-hover disabled:op30"
-                        title="从服务端获取模型列表"
-                        aria-label="从服务端获取模型列表"
-                        disabled={modelBusy}
-                        onClick={() => void refreshModels()}
-                      >
-                        <IconRefresh
-                          size={15}
-                          className={modelBusy ? "animate-spin" : undefined}
-                        />
-                      </button>
-                    </div>
-                    <p className={modelError ? "app-hint text-error-600" : "app-hint"}>
-                      {modelError ??
-                        "该端点必须支持图片输入；右侧按钮可拉取服务端模型列表。"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="translate-lang">
-                    翻译目标语言
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <input
-                      id="translate-lang"
-                      className="app-field"
-                      type="text"
-                      value={form.translateLang}
-                      placeholder="简体中文"
-                      onChange={(e) => update("translateLang", e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <span className="app-label">连接测试</span>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                    <button
-                      type="button"
-                      className="btn-action"
-                      disabled={testing || saving}
-                      onClick={() => void testConnection()}
-                    >
-                      {testing ? "测试中…" : "测试连接"}
-                    </button>
-
-                    {showReport && (
-                      <span
-                        className={`inline-flex items-center gap-1.5 text-mini ${
-                          report.ok ? "text-success-600" : "text-error-600"
-                        }`}
-                        role="status"
-                      >
-                        {report.ok ? <IconCheck size={13} /> : <IconAlert size={13} />}
-                        {report.detail}
-                      </span>
-                    )}
-
-                    {latency !== null && (
-                      <>
-                        <span className="rounded bg-sunken px-1.5 py-0.5 font-mono text-mini tabular-nums color-muted">
-                          {latency} ms
+                      <div className="min-w-0">
+                        <h2 id="pref-ai-title" className="m-0 text-compact font-600 color-base">
+                          AI 服务
+                        </h2>
+                        <p className="m-0 mt-0.5 text-mini color-faint">
+                          端点、模型与连接测试
+                        </p>
+                      </div>
+                      <div className="ml-auto flex min-w-0 max-w-[52%] items-center justify-end gap-2">
+                        {verified && (
+                          <span className="badge badge-color-green" title="当前配置已通过连接测试">
+                            <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
+                            已验证
+                          </span>
+                        )}
+                        <span className="app-meta" title={form.baseUrl}>
+                          {hostOf(form.baseUrl)}
                         </span>
-                        <span
-                          className="h-1 w-20 flex-none overflow-hidden rounded-full bg-sunken"
-                          aria-hidden="true"
-                        >
-                          <i
-                            className="block h-full rounded-full bg-success-500 transition-all"
-                            style={{
-                              width: `${Math.min(100, Math.max(6, (latency / 1500) * 100))}%`,
+                      </div>
+                    </div>
+
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="preset">
+                        快速选择
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <div className="relative">
+                          <select
+                            id="preset"
+                            className="app-field cursor-pointer appearance-none pr-8"
+                            value={activePreset?.label ?? ""}
+                            onChange={(e) => {
+                              const next = presets.find((p) => p.label === e.target.value);
+                              if (next) applyPreset(next);
                             }}
-                          />
-                        </span>
-                      </>
-                    )}
-
-                    {showReport && viaLabel(report.via) && (
-                      <span className="rounded bg-sunken px-1.5 py-0.5 font-mono text-mini color-faint">
-                        {viaLabel(report.via)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              <section className="app-card" data-testid="pref-card" aria-labelledby="pref-key-title">
-                <div className="app-card-head">
-                  <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                    <IconKey size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <h2 id="pref-key-title" className="m-0 text-compact font-600 color-base">
-                      访问凭据
-                    </h2>
-                    <p className="m-0 mt-0.5 text-mini color-faint">
-                      存储在系统钥匙串，不写入配置文件
-                    </p>
-                  </div>
-                  <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      className={`badge border-0 ${
-                        keyStatus ? "badge-color-green" : "badge-color-red"
-                      }`}
-                      title={keyStatus ? "已保存在系统钥匙串" : "点击填写 API Key"}
-                      onClick={() => keyRef.current?.focus()}
-                    >
-                      <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
-                      {keyStatus ? "已保存" : "未设置"}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="api-key">
-                    API Key
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <div className="relative">
-                      <input
-                        id="api-key"
-                        ref={keyRef}
-                        className="app-field pr-9"
-                        type={keyVisible ? "text" : "password"}
-                        value={keyInput}
-                        placeholder={keyStatus ? "已保存，留空则不修改" : "sk-..."}
-                        autoComplete="new-password"
-                        spellCheck={false}
-                        onChange={(e) => setKeyInput(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="absolute right-1 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center border-0 bg-transparent p-0 rounded color-faint transition hover:bg-hover hover:color-base"
-                        title={keyVisible ? "隐藏明文" : "显示明文"}
-                        aria-label={keyVisible ? "隐藏明文" : "显示明文"}
-                        aria-pressed={keyVisible}
-                        onClick={() => setKeyVisible((v) => !v)}
-                      >
-                        {keyVisible ? <IconEyeOff size={15} /> : <IconEye size={15} />}
-                      </button>
+                          >
+                            <option value="">自定义端点</option>
+                            {presets.map((p) => (
+                              <option key={p.label} value={p.label}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 color-faint">
+                            ▾
+                          </span>
+                        </div>
+                        <p className="app-hint">
+                          {activePreset
+                            ? `${activePreset.model} · ${activePreset.note}`
+                            : "选择预设自动填入地址与模型，也可在下方手填任意兼容端点。"}
+                        </p>
+                      </div>
                     </div>
-                    <p className="app-hint">
-                      点「保存」时才会写入钥匙串；留空表示沿用已保存的密钥。
-                      {keyStatus && (
-                        <>
-                          {" "}
+
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="base-url">
+                        服务地址
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <input
+                          id="base-url"
+                          className="app-field"
+                          type="text"
+                          value={form.baseUrl}
+                          placeholder="https://api.deepseek.com"
+                          spellCheck={false}
+                          onChange={(e) => update("baseUrl", e.target.value)}
+                        />
+                        <p className="app-hint">
+                          兼容 OpenAI 接口的服务均可使用；请求时会自动拼接
+                          /chat/completions。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="model">
+                        模型
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <div className="flex items-center gap-2">
+                          <input
+                            id="model"
+                            className="app-field flex-1"
+                            type="text"
+                            list="model-options"
+                            value={form.model}
+                            placeholder="deepseek-flash"
+                            spellCheck={false}
+                            autoComplete="off"
+                            onChange={(e) => update("model", e.target.value)}
+                          />
+                          <datalist id="model-options">
+                            {models.map((id) => (
+                              <option key={id} value={id} />
+                            ))}
+                          </datalist>
                           <button
                             type="button"
-                            className="border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2 disabled:op30"
-                            disabled={keyBusy}
-                            onClick={() => void clearKey()}
+                            className="grid h-8 w-8 flex-none place-items-center rounded-md border border-neutral-300 color-muted transition hover:bg-hover disabled:op30"
+                            title="从服务端获取模型列表"
+                            aria-label="从服务端获取模型列表"
+                            disabled={modelBusy}
+                            onClick={() => void refreshModels()}
                           >
-                            清除已保存的密钥
+                            <IconRefresh
+                              size={15}
+                              className={modelBusy ? "animate-spin" : undefined}
+                            />
                           </button>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              </section>
-
-              <section className="app-card" data-testid="pref-card" aria-labelledby="pref-capture-title">
-                <div className="app-card-head">
-                  <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                    <IconImage size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <h2 id="pref-capture-title" className="m-0 text-compact font-600 color-base">
-                      截图与保存
-                    </h2>
-                    <p className="m-0 mt-0.5 text-mini color-faint">
-                      截图完成后的去向
-                    </p>
-                  </div>
-                  <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
-                    <span className="app-meta" title={form.saveDir ?? ""}>
-                      {form.saveDir?.trim() ? form.saveDir : "~/Pictures/Shutter"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="app-row">
-                  <label className="app-label" htmlFor="save-dir">
-                    保存目录
-                  </label>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
-                      <input
-                        id="save-dir"
-                        className="app-field"
-                        type="text"
-                        value={form.saveDir ?? ""}
-                        placeholder="留空使用默认目录"
-                        spellCheck={false}
-                        onChange={(e) => update("saveDir", e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn-action h-8"
-                        onClick={() => void pickDirectory()}
-                      >
-                        选择…
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-action h-8"
-                        onClick={() => void openSaveDirectory()}
-                      >
-                        打开
-                      </button>
+                        </div>
+                        <p className={modelError ? "app-hint text-error-600" : "app-hint"}>
+                          {modelError ??
+                            "该端点必须支持图片输入；右侧按钮可拉取服务端模型列表。"}
+                        </p>
+                      </div>
                     </div>
-                    <p className="app-hint">留空则使用默认目录 ~/Pictures/Shutter。</p>
-                  </div>
-                </div>
 
-                <div className="app-row-toggle">
-                  <label className="block color-base" htmlFor="auto-save">
-                    <b className="text-compact font-500">自动保存到图库</b>
-                    <em className="mt-0.5 block text-mini not-italic color-faint">
-                      关闭后只有按 ⌘S 保存的截图才会出现在图库
-                    </em>
-                  </label>
-                  <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
-                    <input
-                      id="auto-save"
-                      type="checkbox"
-                      className="peer sr-only"
-                      checked={form.autoSave}
-                      onChange={(e) => update("autoSave", e.target.checked)}
-                    />
-                    <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
-                    <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
-                  </label>
-                </div>
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="translate-lang">
+                        翻译目标语言
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <input
+                          id="translate-lang"
+                          className="app-field"
+                          type="text"
+                          value={form.translateLang}
+                          placeholder="简体中文"
+                          onChange={(e) => update("translateLang", e.target.value)}
+                        />
+                      </div>
+                    </div>
 
-                <div className="app-row-toggle">
-                  <label className="block color-base" htmlFor="copy-after">
-                    <b className="text-compact font-500">自动复制到剪贴板</b>
-                    <em className="mt-0.5 block text-mini not-italic color-faint">
-                      截图确认后立即复制，可直接粘贴
-                    </em>
-                  </label>
-                  <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
-                    <input
-                      id="copy-after"
-                      type="checkbox"
-                      className="peer sr-only"
-                      checked={form.copyAfterCapture}
-                      onChange={(e) => update("copyAfterCapture", e.target.checked)}
-                    />
-                    <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
-                    <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
-                  </label>
-                </div>
-              </section>
+                    <div className="app-row">
+                      <span className="app-label">连接测试</span>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                        <button
+                          type="button"
+                          className="btn-action"
+                          disabled={testing || saving}
+                          onClick={() => void testConnection()}
+                        >
+                          {testing ? "测试中…" : "测试连接"}
+                        </button>
 
-              <section
-                className={`app-card ${highlightShortcuts ? "ring-3 ring-primary-500/25" : ""}`}
-                data-testid="pref-card"
-                aria-labelledby="pref-keys-title"
-                ref={shortcutCardRef}
-              >
-                <div className="app-card-head">
-                  <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                    <IconKeyboard size={15} />
-                  </span>
-                  <div className="min-w-0">
-                    <h2 id="pref-keys-title" className="m-0 text-compact font-600 color-base">
-                      快捷键
-                    </h2>
-                    <p className="m-0 mt-0.5 text-mini color-faint">
-                      全局热键与窗口内操作
-                    </p>
-                  </div>
-                </div>
+                        {showReport && (
+                          <span
+                            className={`inline-flex items-center gap-1.5 text-mini ${
+                              report.ok ? "text-success-600" : "text-error-600"
+                            }`}
+                            role="status"
+                          >
+                            {report.ok ? <IconCheck size={13} /> : <IconAlert size={13} />}
+                            {report.detail}
+                          </span>
+                        )}
 
-                <div className="app-row">
-                  <span className="app-label">开始截图</span>
-                  <div className="flex min-w-0 flex-col gap-1.5">
-                    <ShortcutRecorder
-                      value={form.captureShortcut}
-                      disabled={saving}
-                      onChange={(accel) => update("captureShortcut", accel)}
-                      onRecordingChange={setRecordingShortcut}
-                    />
-                    <p className="app-hint">
-                      全局生效；点按后按下新组合，保存时向系统重新注册。
-                      <button
-                        type="button"
-                        className="ml-1 border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2"
-                        onClick={() =>
-                          update("captureShortcut", defaultCaptureShortcut)
-                        }
-                      >
-                        恢复默认 {formatAccelerator(defaultCaptureShortcut)}
-                      </button>
-                    </p>
-                  </div>
-                </div>
+                        {latency !== null && (
+                          <>
+                            <span className="rounded bg-sunken px-1.5 py-0.5 font-mono text-mini tabular-nums color-muted">
+                              {latency} ms
+                            </span>
+                            <span
+                              className="h-1 w-20 flex-none overflow-hidden rounded-full bg-sunken"
+                              aria-hidden="true"
+                            >
+                              <i
+                                className="block h-full rounded-full bg-success-500 transition-all"
+                                style={{
+                                  width: `${Math.min(100, Math.max(6, (latency / 1500) * 100))}%`,
+                                }}
+                              />
+                            </span>
+                          </>
+                        )}
 
-                <div className="app-row">
-                  <span className="app-label">截图浮层</span>
-                  <div className="grid grid-cols-[repeat(auto-fit,minmax(164px,1fr))] gap-x-4 gap-y-2">
-                    {[
-                      ["Enter", "确认并复制"],
-                      [IS_MAC ? "⌘S" : "Ctrl+S", "确认并保存"],
-                      ["Esc", "取消截图"],
-                      [IS_MAC ? "⌘Z" : "Ctrl+Z", "撤销标注"],
-                      ["1 – 9", "切换工具"],
-                    ].map(([k, label]) => (
-                      <span key={k} className="flex items-center gap-2 text-compact color-muted">
-                        <kbd className="app-kbd">{k}</kbd>
-                        {label}
+                        {showReport && viaLabel(report.via) && (
+                          <span className="rounded bg-sunken px-1.5 py-0.5 font-mono text-mini color-faint">
+                            {viaLabel(report.via)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-key-title">
+                    <div className="app-card-head">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
+                        <IconKey size={15} />
                       </span>
-                    ))}
-                  </div>
-                </div>
-              </section>
+                      <div className="min-w-0">
+                        <h2 id="pref-key-title" className="m-0 text-compact font-600 color-base">
+                          访问凭据
+                        </h2>
+                        <p className="m-0 mt-0.5 text-mini color-faint">
+                          存储在系统钥匙串，不写入配置文件
+                        </p>
+                      </div>
+                      <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          className={`badge border-0 ${
+                            keyStatus ? "badge-color-green" : "badge-color-red"
+                          }`}
+                          title={keyStatus ? "已保存在系统钥匙串" : "点击填写 API Key"}
+                          onClick={() => keyRef.current?.focus()}
+                        >
+                          <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
+                          {keyStatus ? "已保存" : "未设置"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="api-key">
+                        API Key
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <div className="relative">
+                          <input
+                            id="api-key"
+                            ref={keyRef}
+                            className="app-field pr-9"
+                            type={keyVisible ? "text" : "password"}
+                            value={keyInput}
+                            placeholder={keyStatus ? "已保存，留空则不修改" : "sk-..."}
+                            autoComplete="new-password"
+                            spellCheck={false}
+                            onChange={(e) => setKeyInput(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="absolute right-1 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center border-0 bg-transparent p-0 rounded color-faint transition hover:bg-hover hover:color-base"
+                            title={keyVisible ? "隐藏明文" : "显示明文"}
+                            aria-label={keyVisible ? "隐藏明文" : "显示明文"}
+                            aria-pressed={keyVisible}
+                            onClick={() => setKeyVisible((v) => !v)}
+                          >
+                            {keyVisible ? <IconEyeOff size={15} /> : <IconEye size={15} />}
+                          </button>
+                        </div>
+                        <p className="app-hint">
+                          点「保存」时才会写入钥匙串；留空表示沿用已保存的密钥。
+                          {keyStatus && (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                className="border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2 disabled:op30"
+                                disabled={keyBusy}
+                                onClick={() => void clearKey()}
+                              >
+                                清除已保存的密钥
+                              </button>
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+                </>
+              )}
+              {section === "general" && (
+                <>
+                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-capture-title">
+                    <div className="app-card-head">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
+                        <IconImage size={15} />
+                      </span>
+                      <div className="min-w-0">
+                        <h2 id="pref-capture-title" className="m-0 text-compact font-600 color-base">
+                          截图与保存
+                        </h2>
+                        <p className="m-0 mt-0.5 text-mini color-faint">
+                          截图完成后的去向
+                        </p>
+                      </div>
+                      <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
+                        <span className="app-meta" title={form.saveDir ?? ""}>
+                          {form.saveDir?.trim() ? form.saveDir : "~/Pictures/Shutter"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="app-row">
+                      <label className="app-label" htmlFor="save-dir">
+                        保存目录
+                      </label>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+                          <input
+                            id="save-dir"
+                            className="app-field"
+                            type="text"
+                            value={form.saveDir ?? ""}
+                            placeholder="留空使用默认目录"
+                            spellCheck={false}
+                            onChange={(e) => update("saveDir", e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="btn-action h-8"
+                            onClick={() => void pickDirectory()}
+                          >
+                            选择…
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-action h-8"
+                            onClick={() => void openSaveDirectory()}
+                          >
+                            打开
+                          </button>
+                        </div>
+                        <p className="app-hint">留空则使用默认目录 ~/Pictures/Shutter。</p>
+                      </div>
+                    </div>
+
+                    <div className="app-row-toggle">
+                      <label className="block color-base" htmlFor="auto-save">
+                        <b className="text-compact font-500">自动保存到图库</b>
+                        <em className="mt-0.5 block text-mini not-italic color-faint">
+                          关闭后只有按 ⌘S 保存的截图才会出现在图库
+                        </em>
+                      </label>
+                      <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
+                        <input
+                          id="auto-save"
+                          type="checkbox"
+                          className="peer sr-only"
+                          checked={form.autoSave}
+                          onChange={(e) => update("autoSave", e.target.checked)}
+                        />
+                        <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
+                        <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
+                      </label>
+                    </div>
+
+                    <div className="app-row-toggle">
+                      <label className="block color-base" htmlFor="copy-after">
+                        <b className="text-compact font-500">自动复制到剪贴板</b>
+                        <em className="mt-0.5 block text-mini not-italic color-faint">
+                          截图确认后立即复制，可直接粘贴
+                        </em>
+                      </label>
+                      <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
+                        <input
+                          id="copy-after"
+                          type="checkbox"
+                          className="peer sr-only"
+                          checked={form.copyAfterCapture}
+                          onChange={(e) => update("copyAfterCapture", e.target.checked)}
+                        />
+                        <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
+                        <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
+                      </label>
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {section === "shortcuts" && (
+                <>
+                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-hotkey-title">
+                    <div className="app-card-head">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
+                        <IconKeyboard size={15} />
+                      </span>
+                      <div className="min-w-0">
+                        <h2 id="pref-hotkey-title" className="m-0 text-compact font-600 color-base">
+                          全局热键
+                        </h2>
+                        <p className="m-0 mt-0.5 text-mini color-faint">
+                          在任何应用中触发截图
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="app-row">
+                      <span className="app-label">开始截图</span>
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <ShortcutRecorder
+                          value={form.captureShortcut}
+                          disabled={saving}
+                          onChange={(accel) => update("captureShortcut", accel)}
+                          onRecordingChange={setRecordingShortcut}
+                        />
+                        <p className="app-hint">
+                          全局生效；点按后按下新组合，保存时向系统重新注册。
+                          <button
+                            type="button"
+                            className="ml-1 border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2"
+                            onClick={() =>
+                              update("captureShortcut", defaultCaptureShortcut)
+                            }
+                          >
+                            恢复默认 {formatAccelerator(defaultCaptureShortcut)}
+                          </button>
+                        </p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-overlay-title">
+                    <div className="app-card-head">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
+                        <IconOverlay size={15} />
+                      </span>
+                      <div className="min-w-0">
+                        <h2 id="pref-overlay-title" className="m-0 text-compact font-600 color-base">
+                          截图浮层
+                        </h2>
+                        <p className="m-0 mt-0.5 text-mini color-faint">
+                          选区出现后可用的按键
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(164px,1fr))] gap-x-4 gap-y-2 border-t border-mute px-4 py-3">
+                      {[
+                        ["Enter", "确认并复制"],
+                        [IS_MAC ? "⌘S" : "Ctrl+S", "确认并保存"],
+                        ["Esc", "取消截图"],
+                        [IS_MAC ? "⌘Z" : "Ctrl+Z", "撤销标注"],
+                        ["1 – 9", "切换工具"],
+                      ].map(([k, label]) => (
+                        <span key={k} className="flex items-center gap-2 text-compact color-muted">
+                          <kbd className="app-kbd">{k}</kbd>
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
             </>
           )}
         </div>

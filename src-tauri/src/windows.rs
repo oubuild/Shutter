@@ -76,12 +76,13 @@ pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f6
     Ok(win)
 }
 
-/// Open (or refocus) the main window: gallery, settings and about in one shell.
+/// Open (or refocus) the main window: gallery, the three settings panes and
+/// about in one shell.
 ///
-/// `tab` selects the initial section (`gallery` / `settings` / `about`). When the
-/// window already exists it is focused and asked to switch tabs through
-/// `ui://tab` rather than being recreated, which keeps the gallery scroll
-/// position and avoids a visible reload.
+/// `tab` selects the initial section (`gallery` / `ai` / `general` /
+/// `shortcuts` / `about`). When the window already exists it is focused and
+/// asked to switch tabs through `ui://tab` rather than being recreated, which
+/// keeps the gallery scroll position and avoids a visible reload.
 pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
@@ -130,9 +131,9 @@ pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
     Ok(win)
 }
 
-/// Open the settings section of the main window.
+/// Open the settings area of the main window on its first pane (AI 服务).
 pub fn open_settings(app: &AppHandle) -> Result<()> {
-    open_main(app, "settings")?;
+    open_main(app, "ai")?;
     Ok(())
 }
 
@@ -378,17 +379,8 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
             "settings" => {
                 let _ = open_settings(app);
             }
-            // Open the preferences pane and scroll it to the shortcuts card.
-            // The window may still be loading on first open, so the focus event
-            // is replayed once the webview is up.
             "shortcuts" => {
-                let _ = open_settings(app);
-                let handle = app.clone();
-                std::thread::spawn(move || {
-                    use tauri::Emitter;
-                    std::thread::sleep(std::time::Duration::from_millis(600));
-                    let _ = handle.emit("ui://focus", "shortcuts");
-                });
+                let _ = open_main(app, "shortcuts");
             }
             "quit" => app.exit(0),
             _ => {}

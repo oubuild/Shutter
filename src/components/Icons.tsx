@@ -132,3 +132,13 @@ export function IconKeyboard(props: IconProps) {
     </Glyph>
   );
 }
+
+/** In-overlay shortcuts mark: a selection rectangle with a cursor arrow. */
+export function IconOverlay(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.2" strokeDasharray="3.2 2.6" />
+      <path d="M10.5 9.5l5.2 2.1-2.3 1-1 2.3z" />
+    </Glyph>
+  );
+}
