@@ -265,15 +265,30 @@ jobs:
         # update download behind a shared egress 403s once the quota is gone.
         # Rewrite to /releases/download/ permalinks (no API quota), which is
         # also the URL shape the app's CNB-mirror swap recognizes.
+        #
+        # Three draft-release traps, all learned the hard way on v0.4.2:
+        # the by-tag endpoints (`gh release download`, releases/tags/<tag>)
+        # cannot see drafts — resolve via the list endpoint and address the
+        # release and its assets by id; a draft's browser_download_url uses
+        # an `untagged-<hash>` placeholder — build permalinks from the asset
+        # name instead; and asset uploads go to uploads.github.com, not
+        # api.github.com.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release download "$GITHUB_REF_NAME" --pattern latest.json --output latest.json --clobber
-          map=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
-            --jq '.assets | map({key: (.id|tostring), value: .browser_download_url}) | from_entries')
-          jq --argjson map "$map" '
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          jq "first(.[] | select(.tag_name == \"$GITHUB_REF_NAME\"))" releases.json > release.json
+          release_id=$(jq -r '.id' release.json)
+          latest_asset_id=$(jq -r '.assets[] | select(.name == "latest.json") | .id' release.json)
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$latest_asset_id" \
+            -H "Accept: application/octet-stream" > latest.json
+          jq -c --arg repo "$GITHUB_REPOSITORY" --arg tag "$GITHUB_REF_NAME" \
+            '.assets | map({key: (.id|tostring),
+                            value: "https://github.com/\($repo)/releases/download/\($tag)/\(.name)"})
+                   | from_entries' release.json > url-map.json
+          jq --argjson map "$(cat url-map.json)" '
             .platforms |= with_entries(
               .value.url as $old
               | ($old | capture("/releases/assets/(?<id>[0-9]+)/?$")).id as $id
@@ -284,7 +299,10 @@ jobs:
             echo "::error::latest.json still references the API after rewrite"
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$latest_asset_id"
+          gh api --method POST \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=latest.json" \
+            --input latest.json -H "Content-Type: application/octet-stream" > /dev/null
           echo "latest.json now points at download permalinks."
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false > /dev/null
           echo "Released $GITHUB_REF_NAME."
