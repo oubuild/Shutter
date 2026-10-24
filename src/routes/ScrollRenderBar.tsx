@@ -66,6 +66,20 @@ export function ScrollRenderBar() {
     let alive = true;
     (async () => {
       try {
+        // The mount handshake first (reference `await w.emit("scroll_screenshot_bar_panel_loaded")`;
+        // a Rust watchdog closes the session if this never arrives). The owning
+        // monitor rides the response — the `start_screen_recording_event`
+        // broadcast races this webview's load and can be missed.
+        const start = await api.scrollBarLoaded();
+        if (!alive) return;
+        if (start) {
+          monitorId.current = start.monitor_id;
+          setProcessing(false);
+          setPaused(false);
+        }
+        // Register the remaining listeners only after the handshake: a
+        // listener's client-side registry is installed by a fire-and-forget
+        // eval that is reliably lost while the webview is still loading.
         offStart = await events.onStartScreenRecording(({ monitor_id }) => {
           monitorId.current = monitor_id;
           setProcessing(false);
@@ -77,9 +91,6 @@ export function ScrollRenderBar() {
           return;
         }
         offPause = await events.onScrollPauseState((p) => setPaused(p));
-        // The mount handshake (reference `await w.emit("scroll_screenshot_bar_panel_loaded")`);
-        // a Rust watchdog closes the session if this never arrives.
-        await api.scrollBarLoaded();
       } catch (e) {
         offStart?.();
         offPause?.();

@@ -711,11 +711,13 @@ pub async fn open_scroll_screenshot_event(
     .map_err(|e| format!("open scroll panel failed: {e}"))?
 }
 
-/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake; its
-/// seeded selection is (re-)sent in reply.
+/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake; the
+/// seeded selection rides the response (events race the webview load).
 #[tauri::command]
-pub fn scroll_screenshot_panel_loaded_event(app: AppHandle) {
-    crate::scroll::panel_loaded(&app);
+pub fn scroll_screenshot_panel_loaded_event(
+    app: AppHandle,
+) -> std::result::Result<crate::scroll::types::ScrollScreenshotData, String> {
+    crate::scroll::panel_loaded(&app).map_err(|e| format!("{e:#}"))
 }
 
 /// `drawn_scroll_screenshot_event`: the panel settled its selection; ack with
@@ -740,10 +742,12 @@ pub async fn start_scroll_screenshot_event(
 }
 
 /// `scroll_screenshot_bar_panel_loaded`: the control bar's mount handshake
-/// (disarms the teardown watchdog).
+/// (disarms the teardown watchdog); the owning monitor rides the response.
 #[tauri::command]
-pub fn scroll_screenshot_bar_panel_loaded(app: AppHandle) {
-    crate::scroll::bar_loaded(&app);
+pub fn scroll_screenshot_bar_panel_loaded(
+    app: AppHandle,
+) -> Option<crate::scroll::types::StartRecordingEvent> {
+    crate::scroll::bar_loaded(&app)
 }
 
 /// `cancel_scroll_screenshot_event {isCancelScroll}`: pause (true) or resume
@@ -795,4 +799,5 @@ pub fn close_panel(app: AppHandle, label: String) {
         let _ = win.close();
     }
 }
+
 

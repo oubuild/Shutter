@@ -29,7 +29,9 @@ pub mod pipeline;
 pub mod stitch;
 pub mod types;
 
-use crate::scroll::types::{OpenScroll, SaveScroll, ScrollScreenshotData, StartScroll};
+use crate::scroll::types::{
+    OpenScroll, SaveScroll, ScrollScreenshotData, StartRecordingEvent, StartScroll,
+};
 
 /// Lines per injected wheel step (reference: 每次固定行数, with a watchdog).
 const SCROLL_LINES: i32 = 3;
@@ -187,15 +189,26 @@ pub fn open_panel(app: &AppHandle, payload: OpenScroll) -> Result<()> {
     Ok(())
 }
 
-/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake. The
-/// seeded selection is (re-)sent here — the emit in `open_panel` races the
-/// webview load and must be treated as best-effort only.
-pub fn panel_loaded(app: &AppHandle) {
+/// `scroll_screenshot_panel_loaded_event`: the panel's mount handshake.
+///
+/// The seeded selection travels as the invoke RESPONSE, not (only) as an
+/// emitted event: the client-side listener registry is installed by a
+/// fire-and-forget eval that is reliably lost while the webview is still
+/// loading, so any event emitted around mount time never arrives (the panel
+/// then sat behind its `size.w <= 0` render gate, fully invisible). Invokes,
+/// by contrast, ride the request/response IPC and always land.
+pub fn panel_loaded(app: &AppHandle) -> Result<ScrollScreenshotData> {
     let guard = active().lock().unwrap();
-    if let Some(s) = guard.as_ref() {
-        log::info!("[长截图] 面板握手完成 → 发送初始数据 ({})", s.panel_label);
-        send_panel_data(app, &s.seeded);
-    }
+    let Some(s) = guard.as_ref() else {
+        return Err(anyhow!("长截图面板已关闭，请重新截图"));
+    };
+    log::info!("[长截图] 面板握手完成 → 随响应回送初始数据 ({})", s.panel_label);
+    let data = s.seeded.clone();
+    drop(guard);
+    // Belt and braces: a live listener (registered after the page settled)
+    // also picks the seed up from the broadcast.
+    send_panel_data(app, &data);
+    Ok(data)
 }
 
 fn send_panel_data(app: &AppHandle, data: &ScrollScreenshotData) {
@@ -293,13 +306,16 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
     Ok(())
 }
 
-/// `scroll_screenshot_bar_panel_loaded`: the bar's mount handshake.
-pub fn bar_loaded(_app: &AppHandle) {
+/// `scroll_screenshot_bar_panel_loaded`: the bar's mount handshake. The
+/// owning monitor rides the response (same reasoning as `panel_loaded`).
+pub fn bar_loaded(_app: &AppHandle) -> Option<StartRecordingEvent> {
     let guard = active().lock().unwrap();
     if let Some(s) = guard.as_ref() {
         s.control.bar_loaded.store(true, Ordering::SeqCst);
         log::info!("[长截图] 控制条握手完成 (epoch {})", s.epoch);
+        return Some(StartRecordingEvent { monitor_id: s.monitor_id });
     }
+    None
 }
 
 fn arm_bar_watchdog(app: AppHandle, epoch: u64) {

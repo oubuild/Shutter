@@ -254,8 +254,9 @@ export const api = {
         selectionScaleFactor: payload.selectionScaleFactor,
       },
     }),
-  /** Scroll panel → Rust: mount handshake (reply re-sends the seed data). */
-  scrollPanelLoaded: () => invoke<void>("scroll_screenshot_panel_loaded_event"),
+  /** Scroll panel → Rust: mount handshake; the seed data rides the response
+   *  (events race the webview load and have already proven unreliable). */
+  scrollPanelLoaded: () => invoke<ScrollScreenshotData>("scroll_screenshot_panel_loaded_event"),
   /** Scroll panel → Rust: the selection is drawn; capture can begin. */
   drawnScrollScreenshot: () => invoke<void>("drawn_scroll_screenshot_event"),
   /** Scroll panel → Rust: begin scrolling+stitching (1000ms armed beat,
@@ -276,8 +277,11 @@ export const api = {
         scaleFactor: payload.scaleFactor,
       },
     }),
-  /** Control bar → Rust: mount handshake (disarms the watchdog). */
-  scrollBarLoaded: () => invoke<void>("scroll_screenshot_bar_panel_loaded"),
+  /** Control bar → Rust: mount handshake (disarms the watchdog); the owning
+   *  monitor rides the response, null when no session is live. */
+  scrollBarLoaded: () => invoke<{ monitor_id: number } | null>(
+    "scroll_screenshot_bar_panel_loaded",
+  ),
   /** Control bar / panel → Rust: pause or resume the auto-scroller
    *  (`isCancelScroll` is really "stop scrolling" in the reference). */
   cancelScrollScreenshot: (isCancelScroll: boolean) =>

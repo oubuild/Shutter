@@ -535,58 +535,83 @@ export function ScrollScreen() {
   /* ---------------------------------------------------- data + lifecycle */
 
   useEffect(() => {
-    const un: Promise<() => void>[] = [
-      events.onScrollScreenshotData((d: ScrollScreenshotData) => {
-        setCanDraw(true);
-        setCursor("crosshair");
-        // Logical points — exactly this webview's CSS viewport (the panel
-        // window is fullscreen-sized to the monitor in logical px).
-        setSize({ w: d.width, h: d.height });
-        setMonitorId(d.monitorId);
-        setSelScale(d.selectionScaleFactor);
-        if (d.boundsWidth && d.boundsHeight) {
-          setIsMove(false);
-          setIsRecording(false);
-          setBounds({ x: d.x, y: d.y, width: d.boundsWidth, height: d.boundsHeight });
-        }
-      }),
-      events.onScrollScreenClear(() => {
-        if (boundsRef.current) quit();
-        else {
-          setBounds(null);
-          setIsMove(true);
-          setIsRecording(false);
-          setIsStart(false);
-        }
-      }),
-      events.onScrollScreenshotClickStop(() => {
+    let disposed = false;
+    const un: Promise<() => void>[] = [];
+
+    const applyData = (d: ScrollScreenshotData) => {
+      setCanDraw(true);
+      setCursor("crosshair");
+      // Logical points — exactly this webview's CSS viewport (the panel
+      // window is fullscreen-sized to the monitor in logical px).
+      setSize({ w: d.width, h: d.height });
+      setMonitorId(d.monitorId);
+      setSelScale(d.selectionScaleFactor);
+      if (d.boundsWidth && d.boundsHeight) {
+        setIsMove(false);
         setIsRecording(false);
-        void win.setIgnoreCursorEvents(false).catch(() => {});
-      }),
-      events.onScrollScreenshotDrawn(() => {
-        setCanDraw(false);
-        setCursor("default");
-      }),
-      events.onShowScrollTip((on) => setIsStart(on)),
-      events.onScrollScreenshotError((e) => {
-        setErrorTip(e?.message || "拼接失败，请回到拼接点缓慢滚动页面");
-        window.setTimeout(() => setErrorTip(null), 3000);
-      }),
-      events.onScrollImageUpdate(async (e) => {
-        if (!e?.path) return;
-        const url = `${convertFileSrc(e.path)}?timestamp=${Date.now()}`;
-        await new Promise<void>((resolve) => {
-          const img = new Image();
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
-          img.src = url;
-        });
-        setPreviewUrl(url);
-      }),
-    ];
-    // Mount handshake (reference: invoke + emit `scroll_screenshot_panel_loaded_event`).
-    void api.scrollPanelLoaded().catch(() => {});
+        setBounds({ x: d.x, y: d.y, width: d.boundsWidth, height: d.boundsHeight });
+      }
+    };
+
+    (async () => {
+      // Mount handshake (reference: invoke `scroll_screenshot_panel_loaded_event`).
+      //
+      // The seed rides the invoke RESPONSE and the event listeners are only
+      // registered after it resolves: a listener's client-side registry is
+      // installed by a fire-and-forget eval that is reliably lost while the
+      // webview is still loading, so anything emitted around mount time is
+      // silently dropped (the panel used to sit behind its `size.w <= 0`
+      // render gate forever — a fully transparent, invisible window).
+      const seed = await api.scrollPanelLoaded();
+      if (disposed) return;
+      applyData(seed);
+      un.push(
+        events.onScrollScreenshotData(applyData),
+        events.onScrollScreenClear(() => {
+          if (boundsRef.current) quit();
+          else {
+            setBounds(null);
+            setIsMove(true);
+            setIsRecording(false);
+            setIsStart(false);
+          }
+        }),
+        events.onScrollScreenshotClickStop(() => {
+          setIsRecording(false);
+          void win.setIgnoreCursorEvents(false).catch(() => {});
+        }),
+        events.onScrollScreenshotDrawn(() => {
+          setCanDraw(false);
+          setCursor("default");
+        }),
+        events.onShowScrollTip((on) => setIsStart(on)),
+        events.onScrollScreenshotError((e) => {
+          setErrorTip(e?.message || "拼接失败，请回到拼接点缓慢滚动页面");
+          window.setTimeout(() => setErrorTip(null), 3000);
+        }),
+        events.onScrollImageUpdate(async (e) => {
+          if (!e?.path) return;
+          const url = `${convertFileSrc(e.path)}?timestamp=${Date.now()}`;
+          await new Promise<void>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+            img.src = url;
+          });
+          setPreviewUrl(url);
+        }),
+      );
+    })().catch((e: unknown) => {
+      // No live session (or the seed failed): quit instead of haunting the
+      // screen as an invisible fullscreen window.
+      if (!disposed) {
+        console.error("长截图面板初始化失败:", e);
+        void api.hideScrollScreenshotPanel().catch(() => {});
+      }
+    });
+
     return () => {
+      disposed = true;
       for (const p of un) void p.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
