@@ -19,6 +19,15 @@ type Props = {
   onDelete: () => void;
 };
 
+/* Footer buttons share one 32px/6px tier; hierarchy comes from fill — the
+   highest-frequency action is the solid primary, the rest outline, and 删除
+   inverts to black on hover instead of carrying red. */
+const btnBase =
+  "inline-flex h-8 flex-none items-center justify-center gap-1.5 rounded-md border px-3.5 text-[13px] font-500 transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40";
+const btnPrimary = `${btnBase} border-transparent bg-primary-500 text-white hover:bg-primary-600`;
+const btnSecondary = `${btnBase} border-neutral-300 bg-base color-base hover:bg-hover hover:border-neutral-400`;
+const btnDanger = `${btnBase} border-neutral-300 bg-base font-600 color-base hover:bg-primary-500 hover:border-primary-500 hover:text-white`;
+
 export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Props) {
   const [full, setFull] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,28 +80,24 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
           />
           {error && <div className="p-3 text-mini text-error-300">{error}</div>}
         </div>
-        <footer className="flex flex-none items-center justify-between gap-4 border-t border-base px-3.5 py-2.5">
+        <footer className="flex h-16 flex-none items-center justify-between gap-4 border-t border-base px-6">
           <div className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-mini color-base">{item.name}</span>
+            <span className="truncate text-[13px] font-500 color-base">{item.name}</span>
             <span className="font-mono text-micro tabular-nums color-faint">
               {item.width}×{item.height}
             </span>
           </div>
-          <div className="flex flex-none gap-2">
-            <button type="button" className="btn-action" onClick={onCopy}>
+          <div className="flex flex-none items-center gap-3">
+            <button type="button" className={btnPrimary} onClick={onCopy}>
               复制
             </button>
-            <button type="button" className="btn-action" onClick={onReveal}>
+            <button type="button" className={btnSecondary} onClick={onReveal}>
               在文件夹中显示
             </button>
-            <button
-              type="button"
-              className="btn-action text-error-600"
-              onClick={onDelete}
-            >
+            <button type="button" className={btnDanger} onClick={onDelete}>
               删除
             </button>
-            <button type="button" className="btn-primary" onClick={onClose}>
+            <button type="button" className={btnSecondary} onClick={onClose}>
               关闭
             </button>
           </div>

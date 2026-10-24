@@ -121,10 +121,11 @@ input, textarea, select { font: inherit; color: inherit; }
     "app-kbd":
       "inline-flex items-center justify-center min-w-14 px-1.5 py-0.5 rounded border border-neutral-300 bg-sunken font-mono text-mini color-muted leading-none",
 
-    // Shutter AI window (Chat.tsx): 36px controls, 8px control radius,
-    // 12px card radius, spec palette from theme.colors above.
+    // Shutter AI window (Chat.tsx): 32px toolbar controls, 36px primary CTAs
+    // (ai-btn-primary), 8px control radius, 12px card radius, spec palette
+    // from theme.colors above.
     "ai-btn":
-      "inline-flex h-9 flex-none items-center gap-1.5 rounded-lg border border-line bg-surface px-3.5 text-[13px] font-500 color-ink transition hover:bg-surface-alt hover:border-line-strong disabled:pointer-events-none disabled:op-40 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
+      "inline-flex h-8 flex-none items-center gap-1.5 rounded-lg border border-line bg-surface px-3.5 text-[13px] font-500 color-ink transition hover:bg-surface-alt hover:border-line-strong disabled:pointer-events-none disabled:op-40 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
     "ai-btn-primary":
       "inline-flex h-9 flex-none items-center gap-1.5 rounded-lg border border-transparent bg-primary-500 px-4 text-[13px] font-500 text-white transition hover:bg-primary-600 disabled:pointer-events-none disabled:op-45 outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35",
     "ai-iconbtn":

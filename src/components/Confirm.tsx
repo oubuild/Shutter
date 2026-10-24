@@ -1,6 +1,8 @@
 /**
  * Small confirmation dialog. Used before destructive actions where the native
- * `window.confirm` would look out of place inside the rounded card.
+ * `window.confirm` would look out of place inside the rounded card. Monochrome
+ * by spec: the confirm action is the solid-black primary and the warning lives
+ * in the title/message, not in a red button.
  */
 
 import { useEffect } from "react";
@@ -10,7 +12,6 @@ type Props = {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -20,7 +21,6 @@ export function Confirm({
   message,
   confirmLabel = "确定",
   cancelLabel = "取消",
-  danger = false,
   onConfirm,
   onCancel,
 }: Props) {
@@ -58,12 +58,7 @@ export function Confirm({
           <button type="button" className="btn-action" onClick={onCancel}>
             {cancelLabel}
           </button>
-          <button
-            type="button"
-            className={danger ? "btn-action text-error-600" : "btn-primary"}
-            onClick={onConfirm}
-            autoFocus
-          >
+          <button type="button" className="btn-primary" onClick={onConfirm} autoFocus>
             {confirmLabel}
           </button>
         </div>

@@ -374,7 +374,6 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
           title="删除截图"
           message={`确定要删除 ${pendingDelete.name} 吗？此操作不可撤销。`}
           confirmLabel="删除"
-          danger
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => void confirmDelete()}
         />

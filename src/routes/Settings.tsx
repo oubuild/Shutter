@@ -910,7 +910,6 @@ export function SettingsView({ section, active = true }: Props) {
           }
           confirmLabel="仍然保存"
           cancelLabel="先去测试"
-          danger
           onCancel={() => setConfirmSave(false)}
           onConfirm={() => {
             setConfirmSave(false);

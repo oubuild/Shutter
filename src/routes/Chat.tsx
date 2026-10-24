@@ -578,15 +578,19 @@ export function Chat() {
               key={id}
               className={
                 tab === id
-                  ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500/10 px-3 text-[13px] font-500 color-primary-600 transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
-                  : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
+                  ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500 px-3 text-[13px] font-500 text-white transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 hover:bg-primary-600 disabled:pointer-events-none disabled:op-45"
+                  : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 disabled:pointer-events-none disabled:op-45"
               }
               disabled={cropId === ""}
               onClick={() => selectTab(id)}
             >
               {label}
               {acts[id].status === "streaming" && (
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+                <span
+                  className={`inline-block h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
+                    tab === id ? "bg-white" : "bg-primary-500"
+                  }`}
+                />
               )}
             </button>
           ))}
@@ -600,7 +604,11 @@ export function Chat() {
           >
             对话
             {activeId !== null && (
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+              <span
+                className={`inline-block h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
+                  tab === "chat" ? "bg-white" : "bg-primary-500"
+                }`}
+              />
             )}
           </button>
         </div>
@@ -654,7 +662,7 @@ export function Chat() {
 
         {/* Connection status: click to re-probe. */}
         <button
-          className="flex h-9 flex-none items-center gap-1.5 rounded-lg px-1.5 transition hover:bg-surface-alt"
+          className="flex h-8 flex-none items-center gap-1.5 rounded-lg px-1.5 transition hover:bg-surface-alt"
           title={`${conn.detail}（点击重新检查）`}
           onClick={() => settings !== null && checkConnection(settings)}
         >
@@ -1002,7 +1010,6 @@ export function Chat() {
           title="清空结果与对话"
           message="将删除当前窗口中全部动作结果与对话记录。此操作无法撤销。"
           confirmLabel="清空"
-          danger
           onConfirm={() => {
             setConfirmClear(false);
             clearAll();
