@@ -306,7 +306,19 @@ async fn do_confirm(
             windows::open_chat(&app, Some(&crop_id), ai_action.as_deref())?;
         }
         CaptureAction::Pin => {
-            open_pin_for_crop(&app, &crop_id)?;
+            // Reference parity (`pin_panel_*`): the pin lands exactly where the
+            // selection was, 1:1 in logical points — the window is the image
+            // plus a transparent 20px card frame on every side.
+            let monitor = session
+                .monitor(monitor_id)
+                .ok_or_else(|| anyhow::anyhow!("找不到显示器 {monitor_id}"))?;
+            let frame = Rect {
+                x: monitor.x as f64 + rect.x - pin::FRAME_PAD,
+                y: monitor.y as f64 + rect.y - pin::FRAME_PAD,
+                width: rect.width + pin::FRAME_PAD * 2.0,
+                height: rect.height + pin::FRAME_PAD * 2.0,
+            };
+            pin::ensure(&app, &crop_id, frame)?;
         }
         _ => {}
     }
@@ -628,7 +640,7 @@ fn open_pin_for_crop(app: &AppHandle, crop_id: &str) -> Result<()> {
 
     // Match the window to the image, capped so a full-screen crop does not
     // create a window larger than the desktop.
-    let (sw, sh) = app
+    let (sw, sh, s) = app
         .primary_monitor()
         .ok()
         .flatten()
@@ -637,17 +649,19 @@ fn open_pin_for_crop(app: &AppHandle, crop_id: &str) -> Result<()> {
             (
                 (m.size().width as f64 / s) as f64,
                 (m.size().height as f64 / s) as f64,
+                s,
             )
         })
-        .unwrap_or((1440.0, 900.0));
-    let scale = (sw * 0.8 / info.width as f64)
-        .min(sh * 0.8 / info.height as f64)
-        .min(1.0);
+        .unwrap_or((1440.0, 900.0, 1.0));
+    // `crop_info` dims are PNG pixels (physical); the window is logical, so
+    // divide by the scale factor or a Retina pin comes out twice too large.
+    let (iw, ih) = (info.width as f64 / s, info.height as f64 / s);
+    let fit = (sw * 0.8 / iw).min(sh * 0.8 / ih).min(1.0);
     let rect = Rect {
-        x: ((sw - info.width as f64 * scale) / 2.0).max(0.0),
-        y: ((sh - info.height as f64 * scale) / 2.0).max(0.0),
-        width: info.width as f64 * scale,
-        height: info.height as f64 * scale,
+        x: ((sw - iw * fit) / 2.0).max(0.0),
+        y: ((sh - ih * fit) / 2.0).max(0.0),
+        width: iw * fit,
+        height: ih * fit,
     };
     pin::ensure(app, crop_id, rect)?;
     Ok(())

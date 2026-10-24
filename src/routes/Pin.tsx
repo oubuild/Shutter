@@ -3,34 +3,62 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent as ReactMouseEvent,
-  type SyntheticEvent,
 } from "react";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+} from "@tauri-apps/api/window";
 import { api, errorText } from "../lib/ipc";
 
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 8;
+/**
+ * Floating always-on-top pin window — stroke-by-stroke port of the reference
+ * `assets_index-CM6hgQ3v.js` (`pin_panel_*`): a padded rounded image card that
+ * lands 1:1 at the selection, zooms with the wheel (step 0.1, smallest side
+ * 150px, largest 8× the initial size, live % badge) and resizes through
+ * aspect-locked invisible edge zones that anchor the opposite side. Drag to
+ * move, hover for the action circles, Escape closes only while focused.
+ */
+
+const MIN_SIDE = 150;
 const ZOOM_STEP = 0.1;
+const ZOOM_MAX = 8;
 const HINT_MS = 2200;
+const BADGE_MS = 1000;
 
-const centered: Readonly<Record<string, string | number>> = {
-  position: "absolute",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 12,
-  textAlign: "center",
-  fontSize: 12,
-  color: "#e6e9ef",
-  background: "rgba(22, 24, 29, 0.9)",
-  overflow: "hidden",
-};
+type Size = { w: number; h: number };
+type Pos = { x: number; y: number };
+type ZoneDir =
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
 
-function clampZoom(value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value * 10) / 10));
+function clampSize(w: number, h: number, init: Size): Size {
+  const ratio = init.w / init.h;
+  if (w < MIN_SIDE) {
+    w = MIN_SIDE;
+    h = Math.round(w / ratio);
+  }
+  if (h < MIN_SIDE) {
+    h = MIN_SIDE;
+    w = Math.round(h * ratio);
+  }
+  if (w > init.w * ZOOM_MAX) {
+    w = Math.floor(init.w * ZOOM_MAX);
+    h = Math.round(w / ratio);
+  }
+  if (h > init.h * ZOOM_MAX) {
+    h = Math.floor(init.h * ZOOM_MAX);
+    w = Math.round(h * ratio);
+  }
+  return { w, h };
 }
 
 /** Floating always-on-top pin window: show a captured crop, drag, zoom, copy, save. */
@@ -38,15 +66,33 @@ export function Pin({ pinId }: { pinId: string }) {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const baseRef = useRef<{ width: number; height: number } | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [badge, setBadge] = useState<string | null>(null);
+
+  /** Window inner size in logical px; the wheel zoom scales from this. */
+  const initRef = useRef<Size>({ w: 0, h: 0 });
+  const curRef = useRef<Size>({ w: 0, h: 0 });
+  const zoomRef = useRef(1);
+
   const hintTimer = useRef<number | null>(null);
+  const badgeTimer = useRef<number | null>(null);
+  /** Active edge drag; null while not resizing. */
+  const resizeRef = useRef<{
+    dir: ZoneDir;
+    startClient: Pos;
+    startSize: Size;
+    startPos: Pos;
+  } | null>(null);
 
   const showHint = useCallback((text: string) => {
     setHint(text);
     if (hintTimer.current !== null) window.clearTimeout(hintTimer.current);
     hintTimer.current = window.setTimeout(() => setHint(null), HINT_MS);
+  }, []);
+
+  const flashBadge = useCallback((zoom: number) => {
+    setBadge(`${Math.round(zoom * 100)}%`);
+    if (badgeTimer.current !== null) window.clearTimeout(badgeTimer.current);
+    badgeTimer.current = window.setTimeout(() => setBadge(null), BADGE_MS);
   }, []);
 
   const close = useCallback(async () => {
@@ -57,16 +103,28 @@ export function Pin({ pinId }: { pinId: string }) {
     }
   }, [pinId, showHint]);
 
+  // Escape closes only while the pin is focused (reference: tauri://focus +
+  // tauri://blur gate) — an Escape aimed at another app must not eat pins.
   useEffect(() => {
+    const win = getCurrentWindow();
+    let focused = false;
+    const un = [
+      win.listen("tauri://focus", () => {
+        focused = true;
+      }),
+      win.listen("tauri://blur", () => {
+        focused = false;
+      }),
+    ];
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || !focused) return;
       event.preventDefault();
       void close();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      if (hintTimer.current !== null) window.clearTimeout(hintTimer.current);
+      for (const p of un) void p.then((f) => f());
     };
   }, [close]);
 
@@ -88,6 +146,17 @@ export function Pin({ pinId }: { pinId: string }) {
       cancelled = true;
     };
   }, [pinId]);
+
+  // Baseline sizes: the window opens as image + 2×PAD (Rust frames it), and
+  // every zoom/resize keeps that aspect ratio.
+  useEffect(() => {
+    const w = Math.floor(window.innerWidth);
+    const h = Math.floor(window.innerHeight);
+    if (w <= 0 || h <= 0) return;
+    initRef.current = { w, h };
+    curRef.current = { w, h };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataUrl]);
 
   const copy = useCallback(async () => {
     try {
@@ -115,42 +184,164 @@ export function Pin({ pinId }: { pinId: string }) {
     }
   }, [pinId, showHint]);
 
-  const onImageLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
-    const { naturalWidth, naturalHeight } = event.currentTarget;
-    if (!Number.isFinite(naturalWidth) || !Number.isFinite(naturalHeight)) return;
-    if (naturalWidth <= 0 || naturalHeight <= 0) return;
-    baseRef.current = { width: naturalWidth, height: naturalHeight };
-  }, []);
-
   // React binds wheel listeners passively, so handle it natively to preventDefault.
   useEffect(() => {
-    const el = rootRef.current;
-    if (el === null) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const dir = Math.sign(event.deltaY);
-      const base = baseRef.current;
-      if (dir === 0 || base === null) return;
-      const next = clampZoom(zoom - dir * ZOOM_STEP);
-      if (next === zoom) return;
-      const width = Math.round(base.width * next);
-      const height = Math.round(base.height * next);
-      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+      const init = initRef.current;
+      const cur = curRef.current;
+      if (init.w <= 0 || cur.w <= 0) return;
+      const dir = event.deltaY < 0 ? 1 : -1;
+      const next = Math.min(
+        ZOOM_MAX,
+        Math.max(MIN_SIDE / init.w, zoomRef.current + dir * ZOOM_STEP),
+      );
+      if (next === zoomRef.current) return;
+      const ratio = next / zoomRef.current;
+      const size = clampSize(
+        Math.floor(cur.w * ratio),
+        Math.floor(cur.h * ratio),
+        init,
+      );
+      zoomRef.current = next;
+      curRef.current = size;
+      flashBadge(next);
       getCurrentWindow()
-        .setSize(new LogicalSize(width, height))
+        .setSize(new LogicalSize(size.w, size.h))
         .catch((e: unknown) => showHint(`缩放失败：${errorText(e)}`));
-      setZoom(next);
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [zoom, dataUrl, showHint]);
+    // Reference binds on `document`, so the whole surface zooms.
+    document.addEventListener("wheel", onWheel, { passive: false });
+    return () => document.removeEventListener("wheel", onWheel);
+  }, [flashBadge, showHint]);
+
+  /* ------------------------------------------- aspect-locked edge resize */
+
+  const onZoneDown = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>, dir: ZoneDir) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const win = getCurrentWindow();
+      void (async () => {
+        const [scale, inner, outer] = await Promise.all([
+          win.scaleFactor(),
+          win.innerSize(),
+          win.outerPosition(),
+        ]);
+        resizeRef.current = {
+          dir,
+          startClient: { x: event.clientX, y: event.clientY },
+          startSize: {
+            w: Math.round(inner.width / scale),
+            h: Math.round(inner.height / scale),
+          },
+          startPos: {
+            x: outer.x / scale,
+            y: outer.y / scale,
+          },
+        };
+      })().catch(() => undefined);
+    },
+    [],
+  );
+
+  // One pair of document listeners drives whichever zone is held, mirroring
+  // the reference (mousemove/mouseup mounted once, state kept in refs).
+  useEffect(() => {
+    const onMove = (event: MouseEvent) => {
+      const r = resizeRef.current;
+      const init = initRef.current;
+      if (!r || init.w <= 0) return;
+      const ratio = init.w / init.h;
+      const dx = event.clientX - r.startClient.x;
+      const dy = event.clientY - r.startClient.y;
+      let { w, h } = r.startSize;
+      let x = r.startPos.x;
+      let y = r.startPos.y;
+      let anchored = false;
+      switch (r.dir) {
+        case "right":
+          w = r.startSize.w + dx;
+          h = Math.round(w / ratio);
+          break;
+        case "bottom":
+          h = r.startSize.h + dy;
+          w = Math.round(h * ratio);
+          break;
+        case "bottom-right":
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            w = r.startSize.w + dx;
+            h = Math.round(w / ratio);
+          } else {
+            h = r.startSize.h + dy;
+            w = Math.round(h * ratio);
+          }
+          break;
+        case "bottom-left":
+          w = r.startSize.w - dx;
+          h = Math.round(w / ratio);
+          x = r.startPos.x + r.startSize.w - w;
+          anchored = true;
+          break;
+        case "top-right":
+          h = r.startSize.h - dy;
+          w = Math.round(h * ratio);
+          y = r.startPos.y + r.startSize.h - h;
+          anchored = true;
+          break;
+        case "top-left":
+          w = r.startSize.w - dx;
+          h = Math.round(w / ratio);
+          x = r.startPos.x + r.startSize.w - w;
+          y = r.startPos.y + r.startSize.h - h;
+          anchored = true;
+          break;
+        case "left":
+          w = r.startSize.w - dx;
+          h = Math.round(w / ratio);
+          x = r.startPos.x + r.startSize.w - w;
+          anchored = true;
+          break;
+        case "top":
+          h = r.startSize.h - dy;
+          w = Math.round(h * ratio);
+          y = r.startPos.y + r.startSize.h - h;
+          anchored = true;
+          break;
+      }
+      const clamped = clampSize(w, h, init);
+      if (clamped.w !== w) x = r.startPos.x + r.startSize.w - clamped.w;
+      if (clamped.h !== h) y = r.startPos.y + r.startSize.h - clamped.h;
+      const win = getCurrentWindow();
+      const moves = [win.setSize(new LogicalSize(clamped.w, clamped.h))];
+      if (anchored) moves.push(win.setPosition(new LogicalPosition(Math.round(x), Math.round(y))));
+      void Promise.all(moves).catch(() => undefined);
+      curRef.current = clamped;
+    };
+    const onUp = () => {
+      const r = resizeRef.current;
+      if (!r) return;
+      resizeRef.current = null;
+      const init = initRef.current;
+      if (init.w > 0) {
+        zoomRef.current = Math.min(ZOOM_MAX, curRef.current.w / init.w);
+        flashBadge(zoomRef.current);
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [flashBadge]);
 
   const onMouseDown = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
       const target = event.target;
-      if (target instanceof Element && target.closest(".pin-toolbar") !== null) return;
-      if (target !== event.currentTarget && !(target instanceof HTMLImageElement)) return;
+      if (target instanceof Element && target.closest(".pin-actions") !== null) return;
       event.preventDefault();
       getCurrentWindow()
         .startDragging()
@@ -159,19 +350,54 @@ export function Pin({ pinId }: { pinId: string }) {
     [showHint],
   );
 
+  const ZONES: Array<{ dir: ZoneDir; style: CSSProperties; cursor: string }> = [
+    { dir: "top", style: { left: 0, right: 0, top: 0, height: 4 }, cursor: "ns-resize" },
+    { dir: "bottom", style: { left: 0, right: 0, bottom: 0, height: 4 }, cursor: "ns-resize" },
+    { dir: "left", style: { left: 0, top: 0, bottom: 0, width: 4 }, cursor: "ew-resize" },
+    { dir: "right", style: { right: 0, top: 0, bottom: 0, width: 4 }, cursor: "ew-resize" },
+    { dir: "top-left", style: { left: 0, top: 0, width: 10, height: 10 }, cursor: "nwse-resize" },
+    { dir: "top-right", style: { right: 0, top: 0, width: 10, height: 10 }, cursor: "nesw-resize" },
+    { dir: "bottom-left", style: { left: 0, bottom: 0, width: 10, height: 10 }, cursor: "nesw-resize" },
+    { dir: "bottom-right", style: { right: 0, bottom: 0, width: 10, height: 10 }, cursor: "nwse-resize" },
+  ];
+
   if (error !== null) {
-    return <div className="pin-root"><div style={centered}>{error}</div></div>;
+    return <div className="pin-root"><div className="pin-error">{error}</div></div>;
   }
   if (dataUrl === null) return null;
 
   return (
-    <div className="pin-root" ref={rootRef} onMouseDown={onMouseDown}>
-      <img src={dataUrl} alt="" draggable={false} onLoad={onImageLoad} onDoubleClick={() => void close()} />
-      <div className="pin-toolbar" onMouseDown={(event) => event.stopPropagation()}>
-        <button type="button" onClick={() => void copy()}>复制</button>
-        <button type="button" onClick={() => void save()}>保存</button>
-        <button type="button" onClick={() => void close()}>关闭</button>
+    <div className="pin-root" onMouseDown={onMouseDown}>
+      <img src={dataUrl} alt="" draggable={false} />
+      {ZONES.map(({ dir, style, cursor }) => (
+        <div
+          key={dir}
+          className="pin-zone"
+          style={{ ...style, cursor }}
+          onMouseDown={(e) => onZoneDown(e, dir)}
+        />
+      ))}
+      <div className="pin-actions" onMouseDown={(e) => e.stopPropagation()}>
+        <button type="button" className="pin-circle" title="复制" onClick={() => void copy()}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="11" height="11" rx="2" />
+            <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+          </svg>
+        </button>
+        <button type="button" className="pin-circle" title="保存" onClick={() => void save()}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 4v10" />
+            <path d="M8 10l4 4 4-4" />
+            <path d="M4 18h16" />
+          </svg>
+        </button>
+        <button type="button" className="pin-circle pin-circle-close" title="关闭" onClick={() => void close()}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
       </div>
+      {badge !== null && <div className="pin-badge">{badge}</div>}
       {hint !== null && <div className="pin-hint">{hint}</div>}
     </div>
   );
