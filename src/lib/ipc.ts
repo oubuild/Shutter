@@ -67,6 +67,9 @@ export type Preset = {
   note: string;
 };
 
+/** Where in-app updates download from; the CNB mirror is the default. */
+export type UpdateSource = "cnb" | "github";
+
 export type Settings = {
   baseUrl: string;
   model: string;
@@ -76,6 +79,25 @@ export type Settings = {
   autoSave: boolean;
   /** Global capture hotkey as a `global-hotkey` accelerator string. */
   captureShortcut: string;
+  /**
+   * Serialized `UpdateSource`; kept optional because construction sites (the
+   * settings form) don't set it — the backend defaults to the CNB mirror and
+   * always returns the effective value.
+   */
+  updateSource?: UpdateSource;
+};
+
+/** Answer of `check_app_update` (Rust updater.rs). */
+export type AppUpdateInfo = {
+  currentVersion: string;
+  latestVersion: string;
+  notes: string | null;
+};
+
+/** Payload of the `app-update-progress` event. */
+export type AppUpdateProgress = {
+  downloaded: number;
+  total: number | null;
 };
 
 /**
@@ -169,6 +191,12 @@ export const api = {
   modelPresets: () => invoke<Preset[]>("model_presets"),
   saveSettings: (settings: Settings) =>
     invoke<void>("save_settings_cmd", { settings }),
+  /** Ask the backend which release is newest; `null` means up to date. */
+  checkAppUpdate: (source: UpdateSource) =>
+    invoke<AppUpdateInfo | null>("check_app_update", { source }),
+  /** Download + install the expected version; progress via `app-update-progress`. */
+  installAppUpdate: (source: UpdateSource, expectedVersion: string) =>
+    invoke<void>("install_app_update", { source, expectedVersion }),
   setApiKey: (key: string) => invoke<void>("set_api_key", { key }),
   clearApiKey: () => invoke<void>("clear_api_key"),
   apiKeyStatus: () => invoke<boolean>("api_key_status"),
@@ -185,7 +213,7 @@ export const api = {
     invoke<string[]>("list_models", { baseUrl, apiKey }),
   copyText: (text: string) => invoke<void>("copy_text_to_clipboard", { text }),
   openSettings: () => invoke<void>("open_settings_window"),
-  openMain: (tab?: "gallery" | "settings" | "about") =>
+  openMain: (tab?: "gallery" | "ai" | "general" | "shortcuts" | "about") =>
     invoke<void>("open_main_window", { tab: tab ?? null }),
   listGallery: () => invoke<GalleryItem[]>("list_gallery"),
   galleryThumbnail: (path: string) =>
@@ -302,9 +330,6 @@ export const events = {
   /** Fired when the tray asks the main window to switch section. */
   onUiTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://tab", (e) => cb(e.payload)),
-  /** Fired when the tray wants a specific control focused (e.g. shortcuts). */
-  onUiFocus: (cb: (target: string) => void): Promise<UnlistenFn> =>
-    listen<string>("ui://focus", (e) => cb(e.payload)),
   /* Long screenshot events (reference names, emitted by Rust). */
   /** Rust → panel: initial window geometry + selection bounds. */
   onScrollScreenshotData: (cb: (d: ScrollScreenshotData) => void): Promise<UnlistenFn> =>

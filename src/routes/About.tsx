@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { api, errorText } from "../lib/ipc";
+import { api, errorText, type UpdateSource } from "../lib/ipc";
 import { useAppUpdater } from "../lib/updater";
 import { formatAccelerator } from "../lib/shortcut";
 
@@ -16,7 +16,22 @@ export function About() {
   const [captureAccel, setCaptureAccel] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const updater = useAppUpdater();
+  const [updateSource, setUpdateSource] = useState<UpdateSource>("cnb");
+  const updater = useAppUpdater(updateSource);
+
+  const changeUpdateSource = async (source: UpdateSource) => {
+    if (source === updateSource) return;
+    setUpdateSource(source);
+    try {
+      // Read-modify-write: the settings page may be holding other unsaved
+      // edits elsewhere, but save_settings_cmd persists the whole object, so
+      // patch only our field on top of what is currently stored.
+      const settings = await api.getSettings();
+      await api.saveSettings({ ...settings, updateSource: source });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
 
   useEffect(() => {
     api
@@ -25,7 +40,10 @@ export function About() {
       .catch((e) => setError(errorText(e)));
     api
       .getSettings()
-      .then((s) => setCaptureAccel(s.captureShortcut))
+      .then((s) => {
+        setCaptureAccel(s.captureShortcut);
+        setUpdateSource(s.updateSource ?? "cnb");
+      })
       .catch(() => undefined);
     // Read from the bundle so the page never disagrees with tauri.conf.json.
     getVersion()
@@ -114,6 +132,27 @@ export function About() {
           软件更新
         </h2>
         <div className="flex items-center gap-2.5 py-1 text-compact">
+          <span className="w-32 flex-none color-muted">下载源</span>
+          <div className="flex gap-1.5">
+            {(
+              [
+                ["cnb", "CNB 镜像"],
+                ["github", "GitHub"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={updateSource === value ? "btn-primary" : "btn-action"}
+                disabled={updater.phase !== "idle"}
+                onClick={() => void changeUpdateSource(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5 py-1 text-compact">
           <span className="w-32 flex-none color-muted">当前版本</span>
           <span className="min-w-0 flex-1 text-mini color-faint">
             v{version ?? "…"}
@@ -201,7 +240,8 @@ export function About() {
         </h2>
         <p className="text-mini leading-7 color-faint">
           只有点击 AI 动作时，当前选区的图片才会发往你在设置里配置的端点。
-          没有遥测，没有后台服务；检查更新只在你点击时访问 GitHub Releases。
+          没有遥测，没有后台服务；检查更新只在你点击时访问所选下载源
+          （CNB 镜像或 GitHub Releases）。
         </p>
       </section>
     </div>

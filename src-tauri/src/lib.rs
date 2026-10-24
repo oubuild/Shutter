@@ -12,6 +12,7 @@ pub mod scroll;
 pub mod session;
 pub mod settings;
 pub mod types;
+pub mod updater;
 pub mod windows;
 
 use std::sync::{Arc, Mutex};
@@ -252,6 +253,8 @@ pub fn run() {
                 commands::screenshot_crop_event,
                 commands::hide_scroll_screenshot_panel,
                 commands::close_panel,
+                updater::check_app_update,
+                updater::install_app_update,
             ])
         .build(tauri::generate_context!())
         .expect("error while building Shutter")

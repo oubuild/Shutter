@@ -142,6 +142,10 @@ pub struct Settings {
     /// through `save_settings_cmd`, which re-registers it.
     #[serde(default = "default_capture_shortcut")]
     pub capture_shortcut: String,
+    /// Where "check for updates" downloads installers from: the CNB mirror
+    /// (default, mainland-friendly) or GitHub Releases.
+    #[serde(default = "default_update_source")]
+    pub update_source: String,
 }
 
 fn default_true() -> bool {
@@ -150,6 +154,10 @@ fn default_true() -> bool {
 
 pub fn default_capture_shortcut() -> String {
     "CmdOrControl+Shift+KeyA".into()
+}
+
+pub fn default_update_source() -> String {
+    "cnb".into()
 }
 
 impl Default for Settings {
@@ -162,6 +170,7 @@ impl Default for Settings {
             copy_after_capture: true,
             auto_save: true,
             capture_shortcut: default_capture_shortcut(),
+            update_source: default_update_source(),
         }
     }
 }
