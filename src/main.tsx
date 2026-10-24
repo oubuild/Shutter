@@ -640,6 +640,11 @@ function installIpcMock() {
             resolve(null);
             break;
           }
+          case "plugin:app|version":
+            // About page reads the bundle version; keep the mock in sync
+            // with package.json (what bumpp bumps).
+            resolve("0.1.1");
+            break;
           case "plugin:event|listen": {
             const event = String(args.event ?? "");
             const handler = Number(args.handler ?? 0);

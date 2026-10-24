@@ -6,12 +6,14 @@
  */
 
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { api, errorText } from "../lib/ipc";
 import { formatAccelerator } from "../lib/shortcut";
 
 export function About() {
   const [dir, setDir] = useState<string | null>(null);
   const [captureAccel, setCaptureAccel] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -23,17 +25,29 @@ export function About() {
       .getSettings()
       .then((s) => setCaptureAccel(s.captureShortcut))
       .catch(() => undefined);
+    // Read from the bundle so the page never disagrees with tauri.conf.json.
+    getVersion()
+      .then(setVersion)
+      .catch(() => setVersion(null));
   }, []);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-6 py-5">
       <div className="mb-4 flex items-center gap-3.5">
-        <div className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-primary-400 to-sky-400 text-xl font-700 text-white">
-          S
-        </div>
+        {/* The real app icon (same source as src-tauri/icons/icon.png) —
+            macOS rounds the dock/canvas corners itself, so square is correct
+            here; the previous gradient "S" placeholder is gone. */}
+        <img
+          src="icon-256.png"
+          alt="Shutter"
+          width={48}
+          height={48}
+          className="h-12 w-12 flex-none rounded-xl"
+          draggable={false}
+        />
         <div>
           <h1 className="m-0 text-lg font-600 color-base">Shutter</h1>
-          <div className="text-mini color-faint">版本 0.1.0</div>
+          <div className="text-mini color-faint">版本 {version ?? "…"}</div>
         </div>
       </div>
 
