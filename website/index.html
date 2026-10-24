@@ -200,6 +200,20 @@
     background: var(--surface-alt); border: 1px solid var(--line);
     border-radius: 5px; padding: 1px 6px;
   }
+  .dl-card { position: relative; }
+  .os-badge {
+    position: absolute; top: 12px; right: 12px;
+    font-size: 11.5px; font-weight: 600; color: var(--primary);
+    background: #f4f4f5; border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 9px;
+  }
+  .dl-alt {
+    margin-top: 8px; font-size: 12.5px; color: var(--ink-faint);
+  }
+  .dl-alt a { color: var(--ink-dim); text-decoration: underline; text-underline-offset: 3px; }
+  .dl-alt a:hover { color: var(--ink); }
+  .dl-mirror { margin-top: 22px; font-size: 13.5px; color: var(--ink-dim); }
+  .dl-mirror a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
 
   /* ---------- footer ---------- */
   footer { padding: 44px 0 60px; color: var(--ink-faint); font-size: 13.5px; }
@@ -330,28 +344,34 @@
     <h2>下载 Shutter</h2>
     <p class="section-sub">当前版本 <span class="js-version">v0.1.1</span>。也可以到 <a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary);">GitHub Releases</a> 查看全部历史版本。</p>
     <div class="dl-grid">
-      <div class="dl-card">
+      <div class="dl-card" data-os="macos">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16.5 12.4c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.2-2.8.9-3.5.9-.7 0-1.9-.9-3.1-.9-1.6 0-3.1 1-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.5.8 1.1 1.7 2.4 2.9 2.4 1.2 0 1.6-.8 3.1-.8 1.4 0 1.8.8 3.1.7 1.3 0 2.1-1.1 2.9-2.3.9-1.3 1.3-2.6 1.3-2.7 0 0-2.6-1-2.6-3.9zM14.2 5.2c.7-.8 1.1-1.9 1-3.2-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.5 2.9-1.3z"/></svg>
         <div class="os">macOS</div>
         <div class="req">macOS 12+ · Apple Silicon / Intel</div>
-        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载 dmg</a>
+        <a class="btn btn-primary" id="dl-macos" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载 dmg</a>
+        <div class="dl-alt" id="dl-macos-alt" hidden><a href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">Intel（x64）版本</a></div>
         <div class="dl-files"><code>*_aarch64.dmg</code> <code>*_x64.dmg</code></div>
       </div>
-      <div class="dl-card">
+      <div class="dl-card" data-os="windows">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5.5 10.5 4.4v7.1H3zM3 18.5l7.5 1.1v-7H3zM12 4.2 21 3v8.5h-9zM12 19.8 21 21v-8.5h-9z"/></svg>
         <div class="os">Windows</div>
         <div class="req">Windows 10+ · x64</div>
-        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载安装包</a>
+        <a class="btn btn-primary" id="dl-windows" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载安装包</a>
+        <div class="dl-alt" id="dl-windows-alt" hidden><a href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">msi 安装包</a></div>
         <div class="dl-files"><code>*_x64-setup.exe</code> <code>*_x64_en-US.msi</code></div>
       </div>
-      <div class="dl-card">
+      <div class="dl-card" data-os="linux">
         <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3c3 0 6 2.5 6 7 0 4.5-2.7 11-6 11S6 14.5 6 10c0-4.5 3-7 6-7z"/><path d="M9 8.5h.01M15 8.5h.01M9.5 13c.7.8 1.6 1.2 2.5 1.2s1.8-.4 2.5-1.2"/></svg>
         <div class="os">Linux</div>
         <div class="req">x64 · deb / AppImage</div>
-        <a class="btn btn-primary" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载</a>
+        <a class="btn btn-primary" id="dl-linux" href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">下载</a>
+        <div class="dl-alt" id="dl-linux-alt" hidden><a href="https://github.com/oubuild/Shutter/releases/latest" target="_blank" rel="noopener">AppImage</a></div>
         <div class="dl-files"><code>*_amd64.deb</code> <code>*_amd64.AppImage</code></div>
       </div>
     </div>
+    <p class="dl-mirror" id="dl-mirror" hidden>
+      国内访问 GitHub 慢？可从 <a id="dl-mirror-link" href="#" target="_blank" rel="noopener">CNB 镜像</a> 下载同一版本安装包。
+    </p>
     <p class="hero-note" style="margin-top: 26px;">
       macOS 版为 ad-hoc 签名、未公证：首次打开请前往 系统设置 → 隐私与安全性 → 仍要打开。
     </p>
@@ -373,13 +393,91 @@
 </footer>
 
 <script>
-  // 版本号不写死：从 GitHub Releases 读最新 tag，失败时保留 HTML 里的兜底值。
+  // 版本号与安装包直链不写死：从 GitHub Releases 读最新版本，把每张下载卡
+  // 的按钮指到对应的资产文件，并按访客系统高亮。API 拉不到时（限流/离线）
+  // 保留 HTML 里的 releases/latest 兜底链接，页面照常可用。
+  //
+  // CNB 国内镜像：在 cnb.cool 建好镜像仓库并跑通 sync-cnb-release-assets
+  // workflow 后，下面这行就是镜像仓库路径（形如 "group/name"）；留空则
+  // 完全不显示。
+  const CNB_REPO = "ryanuo/shutter";
+
+  const GH_LATEST = "https://github.com/oubuild/Shutter/releases/latest";
+
+  function detectOs() {
+    const ua = navigator.userAgent;
+    if (/Mac|Darwin/i.test(ua)) return "macos";
+    if (/Windows/i.test(ua)) return "windows";
+    if (/Linux|X11/i.test(ua) && !/Android/i.test(ua)) return "linux";
+    return null;
+  }
+
+  function detectMacArch() {
+    // Apple Silicon: Chrome/Safari 自 macOS 11 起 UA 带 ARM；老 UA 只能靠
+    // platform 判断（"MacIntel" 在 Rosetta 下也出现，所以优先看显式标记）。
+    const ua = navigator.userAgent;
+    if (/ARM|aarch64|arm64/i.test(ua)) return "aarch64";
+    return "x64";
+  }
+
+  // 给访客当前系统的卡片打标。
+  const os = detectOs();
+  if (os) {
+    const card = document.querySelector(`.dl-card[data-os="${os}"]`);
+    if (card) {
+      const badge = document.createElement("span");
+      badge.className = "os-badge";
+      badge.textContent = "你的系统";
+      card.appendChild(badge);
+    }
+  }
+
   fetch("https://api.github.com/repos/oubuild/Shutter/releases/latest")
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
     .then((d) => {
       if (typeof d.tag_name !== "string" || !d.tag_name) return;
       const tag = d.tag_name.startsWith("v") ? d.tag_name : "v" + d.tag_name;
       document.querySelectorAll(".js-version").forEach((el) => (el.textContent = tag));
+
+      const url = (pattern) => {
+        const asset = (d.assets || []).find((a) => pattern.test(a.name));
+        return asset ? asset.browser_download_url : null;
+      };
+      const set = (id, href) => {
+        const el = document.getElementById(id);
+        if (el && href) el.href = href;
+      };
+      const showAlt = (id, href, text) => {
+        const el = document.getElementById(id);
+        if (!el || !href) return;
+        el.hidden = false;
+        el.querySelector("a").href = href;
+        if (text) el.querySelector("a").textContent = text;
+      };
+
+      const aarch64Dmg = url(/_aarch64\.dmg$/);
+      const x64Dmg = url(/_x64\.dmg$/);
+      // 主按钮给访客匹配的架构，次链接给另一种。
+      if (os === "macos" && detectMacArch() === "aarch64") {
+        set("dl-macos", aarch64Dmg);
+        showAlt("dl-macos-alt", x64Dmg, "Intel（x64）版本");
+      } else {
+        set("dl-macos", x64Dmg || aarch64Dmg);
+        showAlt("dl-macos-alt", aarch64Dmg, "Apple Silicon（aarch64）版本");
+      }
+      set("dl-windows", url(/_x64-setup\.exe$/));
+      showAlt("dl-windows-alt", url(/_x64_en-US\.msi$/), "msi 安装包");
+      set("dl-linux", url(/_amd64\.deb$/));
+      showAlt("dl-linux-alt", url(/_amd64\.AppImage$/), "AppImage");
+
+      if (CNB_REPO) {
+        const mirror = document.getElementById("dl-mirror");
+        const link = document.getElementById("dl-mirror-link");
+        if (mirror && link) {
+          link.href = `https://cnb.cool/${CNB_REPO}/-/releases/tag/${tag}`;
+          mirror.hidden = false;
+        }
+      }
     })
     .catch(() => {});
 </script>
