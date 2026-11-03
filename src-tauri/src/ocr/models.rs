@@ -155,6 +155,7 @@ where
     }
 
     // Fresh models must not run through a stale cached session.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     super::rapid::invalidate(provider);
     Ok(())
 }

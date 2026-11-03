@@ -6,6 +6,7 @@
 //! The last selection is persisted in `settings.json` as `ocr_provider`.
 
 pub mod models;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod rapid;
 #[cfg(target_os = "macos")]
 pub mod vision;
@@ -113,15 +114,25 @@ pub async fn extract(provider: OcrProvider, png: Vec<u8>) -> Result<OcrOutcome> 
             }
         }
         OcrProvider::Ppocr | OcrProvider::Qota => {
-            if !models::models_supported() {
-                return Err(anyhow!(
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            {
+                if !models::models_supported() {
+                    return Err(anyhow!(
+                        "本地模型仅支持 Apple Silicon 且 macOS 13.4 以上的设备"
+                    ));
+                }
+                if !models::is_downloaded(provider) {
+                    return Err(anyhow!("模型尚未下载，请先在识别方式中选择下载"));
+                }
+                run_blocking(move |png| rapid::extract(provider, png), png).await
+            }
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+            {
+                let _ = png;
+                Err(anyhow!(
                     "本地模型仅支持 Apple Silicon 且 macOS 13.4 以上的设备"
-                ));
+                ))
             }
-            if !models::is_downloaded(provider) {
-                return Err(anyhow!("模型尚未下载，请先在识别方式中选择下载"));
-            }
-            run_blocking(move |png| rapid::extract(provider, png), png).await
         }
     }
 }

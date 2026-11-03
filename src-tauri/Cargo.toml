@@ -38,13 +38,6 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Named only for `Update::download_url` in updater.rs.
 url = "2"
-# Local OCR (识图): the RapidOCR pipeline (det + rec) over ONNX Runtime for the
-# two optional downloadable models. Pure Rust — preprocessing is image/imageproc.
-rapidocr-core = "0.2.2"
-# rapidocr-core 0.2.2 is written against the rc.12 API (`Session::builder()`
-# with no arguments); newer rc's changed that signature, so the whole graph
-# must unify on exactly rc.12 (ONNX Runtime 1.24.2 via download-binaries).
-ort = "=2.0.0-rc.12"
 # Verify every downloaded model artifact before it can be installed.
 sha2 = "0.10"
 
@@ -66,6 +59,17 @@ core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSString", "NSProcessInfo"] }
 objc2-vision = { version = "0.3", default-features = false, features = ["std", "alloc", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNObservation"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+# Local OCR (识图): the RapidOCR pipeline (det + rec) over ONNX Runtime for the
+# two optional downloadable models. Apple Silicon only — ONNX Runtime ships
+# no prebuilt binaries for x86_64-apple-darwin, and the picker gates the model
+# cards to Apple Silicon (ocr::models::models_supported) everywhere else.
+rapidocr-core = "0.2.2"
+# rapidocr-core 0.2.2 is written against the rc.12 API (`Session::builder()`
+# with no arguments); newer rc's changed that signature, so the whole graph
+# must unify on exactly rc.12 (ONNX Runtime 1.24.2 via download-binaries).
+ort = "=2.0.0-rc.12"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
