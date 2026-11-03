@@ -154,6 +154,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          # Bumped past the implicit `v0-rust`. Early caches were saved by
+          # builds that still linked ONNX Runtime on Windows; a stale
+          # `DirectML.dll` out of one of those is what broke MSI bundling.
+          prefix-key: v1-rust
           # One cache per target: the four jobs build four different dependency
           # graphs, and a shared key would evict itself on every run.
           key: ${{ matrix.target }}
@@ -193,6 +197,32 @@ jobs:
 
       - name: Typecheck frontend
         run: pnpm typecheck
+
+      # tauri's MSI bundler globs every `*.dll` sitting in the release directory
+      # and hard-references each one in the generated WiX source (a known TODO
+      # in tauri-bundler). A stale `DirectML.dll` — an ONNX Runtime artifact —
+      # was still listed there while not existing anymore, so light.exe died
+      # with LGHT0001. Purge the ONNX leftovers before bundling and print what
+      # remains, so a repeat failure carries the evidence in the log.
+      - name: Purge stale ONNX Runtime DLLs
+        if: matrix.platform == 'windows-2025'
+        shell: pwsh
+        run: |
+          $release = "src-tauri\target\${{ matrix.target }}\release"
+          if (-not (Test-Path $release)) {
+            Write-Host "release dir not present, nothing to purge"
+            exit 0
+          }
+          Write-Host "DLLs in release dir before purge:"
+          Get-ChildItem $release -Filter *.dll | ForEach-Object { Write-Host "  $($_.Name)" }
+          Get-ChildItem $release -Filter *.dll |
+            Where-Object { $_.Name -match '^(DirectML|onnxruntime.*)\.dll$' } |
+            ForEach-Object {
+              Write-Host "removing stale $($_.Name)"
+              Remove-Item $_.FullName -Force
+            }
+          Write-Host "DLLs remaining:"
+          Get-ChildItem $release -Filter *.dll | ForEach-Object { Write-Host "  $($_.Name)" }
 
       - name: Build and bundle
         uses: tauri-apps/tauri-action@v1
