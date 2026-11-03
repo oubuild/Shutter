@@ -151,17 +151,29 @@ pub fn list_windows(app: AppHandle) -> Vec<crate::types::WindowInfo> {
 #[cfg(feature = "debug-hooks")]
 #[tauri::command]
 pub fn debug_open_view(app: AppHandle, view: String) -> std::result::Result<(), String> {
-    match view.as_str() {
-        "settings" => windows::open_settings(&app).map_err(|e| format!("{e:#}")),
-        "gallery" | "main" => windows::open_main(&app, "gallery")
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}")),
-        "about" => windows::open_main(&app, "about")
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}")),
-        "chat" => windows::open_chat(&app, None, None).map_err(|e| format!("{e:#}")),
-        other => Err(format!("unknown view {other}")),
+    // Comma-separated so one env var can lay out several windows at once.
+    for name in view.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        match name {
+            "settings" | "more" => windows::open_settings_page(&app, "more", Some("ai"))
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))?,
+            "shortcut" => windows::open_settings_page(&app, "shortcut", None)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))?,
+            "save" => windows::open_settings_page(&app, "save", None)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))?,
+            "gallery" | "main" => windows::open_main(&app, "gallery")
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))?,
+            "about" => windows::open_about(&app)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))?,
+            "chat" => windows::open_chat(&app, None, None).map_err(|e| format!("{e:#}"))?,
+            other => return Err(format!("unknown view {other}")),
+        }
     }
+    Ok(())
 }
 
 /// Debug-only: open a plain window to compare against the overlay window.
@@ -570,9 +582,54 @@ pub fn copy_text_to_clipboard(text: String) -> std::result::Result<(), String> {
     output::copy_text(&text).map_err(|e| format!("{e:#}"))
 }
 
+/// Open a settings secondary window. `page` is `shortcut` / `save` / `more`
+/// (default `more`, which also takes the optional top `tab`). The legacy
+/// no-arg call from the AI window keeps landing on 更多设置 → AI 服务.
 #[tauri::command]
-pub fn open_settings_window(app: AppHandle) -> std::result::Result<(), String> {
-    windows::open_settings(&app).map_err(|e| format!("{e:#}"))
+pub fn open_settings_window(
+    app: AppHandle,
+    page: Option<String>,
+    tab: Option<String>,
+) -> std::result::Result<(), String> {
+    windows::open_settings_page(&app, page.as_deref().unwrap_or("more"), tab.as_deref())
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// The about window (menu 关于 Shutter).
+#[tauri::command]
+pub fn open_about_window(app: AppHandle) -> std::result::Result<(), String> {
+    windows::open_about(&app)
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Whether the OS launch-at-login item is installed. The login item is the
+/// only source of truth — nothing is mirrored into settings.json.
+#[tauri::command]
+pub fn autostart_status(app: AppHandle) -> std::result::Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| format!("{e:#}"))
+}
+
+/// Install or remove the launch-at-login item.
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> std::result::Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    }
+    .map_err(|e| format!("设置开机自启动失败：{e:#}"))
+}
+
+/// Quit the whole app from the popover menu's 退出 row (same path as the
+/// tray's 退出 Shutter).
+#[tauri::command]
+pub fn exit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 /// Open the main window on the requested tab (`gallery` / `ai` / `general` /

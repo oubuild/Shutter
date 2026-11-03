@@ -88,6 +88,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -288,6 +292,10 @@ pub fn run() {
             commands::list_models,
             commands::copy_text_to_clipboard,
             commands::open_settings_window,
+            commands::open_about_window,
+            commands::autostart_status,
+            commands::set_autostart,
+            commands::exit_app,
             commands::open_main_window,
             commands::list_gallery,
             commands::gallery_thumbnail,

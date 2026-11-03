@@ -289,6 +289,7 @@ function installIpcMock() {
     lastAction: null as string | null,
     lastCopied: null as string | null,
     openedSettings: 0,
+    autostart: false,
     settings,
     downloadedModels,
     emit: (event: string, payload: unknown) => emitEvent(event, payload),
@@ -405,8 +406,17 @@ function installIpcMock() {
             mock.openedSettings += 1;
             resolve(null);
             break;
+          case "open_about_window":
           case "open_main_window":
           case "open_chat_window":
+          case "exit_app":
+            resolve(null);
+            break;
+          case "autostart_status":
+            resolve(mock.autostart);
+            break;
+          case "set_autostart":
+            mock.autostart = Boolean(args.enabled);
             resolve(null);
             break;
           case "debug_report":

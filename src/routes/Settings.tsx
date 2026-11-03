@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   api,
   errorText,
@@ -86,9 +87,29 @@ type Props = {
   section: SettingsSection;
   /** True while this pane is the visible one; gates window-level shortcuts. */
   active?: boolean;
+  /**
+   * Skip the internal title header — the 更多设置 window provides its own tab
+   * bar where a per-section title would be redundant.
+   */
+  headerless?: boolean;
 };
 
-export function SettingsView({ section, active = true }: Props) {
+/** Field-by-field equality for the focus-refresh below. */
+function sameSettings(a: Settings, b: Settings): boolean {
+  return (
+    a.baseUrl === b.baseUrl &&
+    a.model === b.model &&
+    a.translateLang === b.translateLang &&
+    (a.saveDir ?? "") === (b.saveDir ?? "") &&
+    a.autoSave === b.autoSave &&
+    a.copyAfterCapture === b.copyAfterCapture &&
+    a.captureShortcut === b.captureShortcut &&
+    (a.updateSource ?? "cnb") === (b.updateSource ?? "cnb") &&
+    (a.ocrProvider ?? "system") === (b.ocrProvider ?? "system")
+  );
+}
+
+export function SettingsView({ section, active = true, headerless = false }: Props) {
   const [form, setForm] = useState<Settings | null>(null);
   /** The persisted values, for the dirty check in the footer. */
   const [initial, setInitial] = useState<Settings | null>(null);
@@ -136,6 +157,45 @@ export function SettingsView({ section, active = true }: Props) {
       alive = false;
     };
   }, []);
+
+  // Settings now live in several small windows; another one may have saved
+  // while this window sat in the background. On focus, silently refresh when
+  // nothing is in edit, so a later save here cannot resurrect stale fields.
+  // A form mid-edit is never touched.
+  const cleanRef = useRef(true);
+  cleanRef.current =
+    form !== null && initial !== null && sameSettings(form, initial) && keyInput.trim() === "";
+
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (!focused || !cleanRef.current) return;
+        api
+          .getSettings()
+          .then((fresh) => {
+            if (!alive || !cleanRef.current) return;
+            setForm(fresh);
+            setInitial(fresh);
+          })
+          .catch(() => undefined);
+        api
+          .apiKeyStatus()
+          .then((has) => alive && setKeyStatus(has))
+          .catch(() => undefined);
+      })
+      .then((fn) => {
+        if (alive) unlisten = fn;
+        else fn();
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [active]);
 
   // Hide the success notice about two seconds after a save.
   useEffect(() => {
@@ -411,14 +471,16 @@ export function SettingsView({ section, active = true }: Props) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="settings-pane">
-      <header className="flex-none px-5 pt-5 pb-4">
-        <h1 className="m-0 text-xl font-600 tracking-tight color-base">
-          {SECTION_TITLES[section]}
-        </h1>
-        <p className="mt-1 mb-0 text-compact color-faint">
-          改动在点击「保存」后生效
-        </p>
-      </header>
+      {!headerless && (
+        <header className="flex-none px-5 pt-5 pb-4">
+          <h1 className="m-0 text-xl font-600 tracking-tight color-base">
+            {SECTION_TITLES[section]}
+          </h1>
+          <p className="mt-1 mb-0 text-compact color-faint">
+            改动在点击「保存」后生效
+          </p>
+        </header>
+      )}
 
       <div className="flex-1 overflow-y-auto px-5 pb-6">
         <div className="flex max-w-[820px] flex-col gap-4">

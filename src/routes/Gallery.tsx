@@ -7,9 +7,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText, type GalleryItem } from "../lib/ipc";
 import { Preview } from "../components/Preview";
 import { Confirm } from "../components/Confirm";
+import { IconFolder, IconRefresh } from "../components/Icons";
 import { formatAccelerator } from "../lib/shortcut";
 
 type Props = {
@@ -97,6 +99,30 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
     if (!active) return;
     void load();
   }, [load, reloadKey, active]);
+
+  // With the nav gone the pane is permanently active, so the old
+  // "switch tabs and back" refresh path no longer exists. The main window
+  // regains focus when a capture overlay closes (or a settings window is
+  // dismissed) — reload there; the Rust side caches thumbnails, so this is
+  // cheap and silent.
+  useEffect(() => {
+    if (!active) return;
+    let unlisten: (() => void) | null = null;
+    let alive = true;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) void load();
+      })
+      .then((fn) => {
+        if (alive) unlisten = fn;
+        else fn();
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [load, active]);
 
   useEffect(() => {
     if (!active) return;
@@ -239,22 +265,26 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
                 : `${items.length} 张截图`}
           </span>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-1">
           <button
             type="button"
-            className="btn-action"
+            title={busy ? "正在刷新…" : "刷新"}
+            aria-label="刷新"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg color-muted transition-colors duration-100 outline-none hover:bg-hover hover:color-base disabled:pointer-events-none disabled:op-40 focus-visible:ring-2 focus-visible:ring-primary-500/40"
             onClick={() => void refresh()}
             disabled={busy}
           >
-            {busy ? "刷新中…" : "刷新"}
+            <IconRefresh size={16} className={busy ? "animate-spin" : undefined} />
           </button>
           <button
             type="button"
-            className="btn-action"
+            title="打开文件夹"
+            aria-label="打开文件夹"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg color-muted transition-colors duration-100 outline-none hover:bg-hover hover:color-base disabled:pointer-events-none disabled:op-40 focus-visible:ring-2 focus-visible:ring-primary-500/40"
             onClick={() => void openFolder()}
             disabled={!dir}
           >
-            打开文件夹
+            <IconFolder size={16} />
           </button>
         </div>
       </header>

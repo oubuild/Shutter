@@ -5,6 +5,10 @@
   "windows": [
     "main",
     "settings",
+    "settings_shortcut",
+    "settings_save",
+    "settings_more",
+    "about",
     "chat",
     "overlay-*",
     "pin-*",

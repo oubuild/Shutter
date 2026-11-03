@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Shutter</title>
+    <script>
+      // Follow the OS appearance before first paint: the UnoCSS dark variant
+      // is class-based (`.dark` on <html>), so the class must exist before any
+      // component renders — otherwise a dark-mode user sees a light flash.
+      (function () {
+        var mq = window.matchMedia("(prefers-color-scheme: dark)");
+        var apply = function () {
+          document.documentElement.classList.toggle("dark", mq.matches);
+        };
+        apply();
+        mq.addEventListener("change", apply);
+      })();
+    </script>
     <style>
       html,
       body,

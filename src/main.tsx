@@ -11,7 +11,12 @@ import { Pin } from "./routes/Pin";
 import { Chat } from "./routes/Chat";
 import { ScrollScreen } from "./routes/ScrollScreen";
 import { ScrollRenderBar } from "./routes/ScrollRenderBar";
-import { Main, type Tab } from "./routes/Main";
+import { Main } from "./routes/Main";
+import { SettingsView } from "./routes/Settings";
+import { MoreSettings } from "./routes/MoreSettings";
+import { About } from "./routes/About";
+import type { MoreSettingsTab, SettingsWindowPage } from "./lib/ipc";
+import { IS_MAC } from "./lib/shortcut";
 import { installBootGuard, markMounted } from "./lib/boot-guard";
 import "./styles/capture.css";
 // UnoCSS output: the antfu design layer + utilities used by the settings pane.
@@ -19,20 +24,32 @@ import "./styles/capture.css";
 import "virtual:uno.css";
 
 /**
- * One bundle, five window shapes. The Rust side opens every window with
+ * One bundle, every window shape. The Rust side opens each window with
  * `index.html?view=<name>`, so routing stays a plain query parameter and we
- * avoid pulling in a router for five static screens.
+ * avoid pulling in a router for static screens. The settings secondary
+ * windows add `page` (`shortcut` / `save` / `more`) and, for `more`, a `tab`.
  */
-function pickTab(value: string | null): Tab {
-  // "settings" is the pre-split name; old window URLs still land on the AI pane.
-  if (value === "settings") return "ai";
-  return value === "gallery" ||
-    value === "about" ||
-    value === "ai" ||
-    value === "general" ||
-    value === "shortcuts"
-    ? value
-    : "gallery";
+
+/** Roots like SettingsView/About are flex children (`flex-1`) with their own
+ *  scroll area; without this flex column they would grow past the window and
+ *  clip (no scrollbar) — exactly what happened to the about page's tail. */
+function windowShell(node: React.ReactElement): React.ReactElement {
+  return (
+    <div
+      className="flex h-full w-full flex-col bg-secondary font-sans text-compact color-base"
+      data-platform={IS_MAC ? "macos" : "other"}
+    >
+      {node}
+    </div>
+  );
+}
+
+function pickSettingsPage(value: string | null): SettingsWindowPage {
+  return value === "shortcut" || value === "save" || value === "more" ? value : "more";
+}
+
+function pickMoreTab(value: string | null): MoreSettingsTab {
+  return value === "general" || value === "shortcuts" || value === "update" ? value : "ai";
 }
 
 function pickView(): React.ReactElement {
@@ -49,11 +66,15 @@ function pickView(): React.ReactElement {
       // The long-screenshot control bar (`recorder_bar_panel`).
       return <ScrollRenderBar />;
     case "main":
-      return <Main initialTab={pickTab(params.get("tab"))} />;
-    // The settings window was folded into `main`; keep the route so an old
-    // window URL (or a bookmarked dev URL) still renders something sensible.
-    case "settings":
-      return <Main initialTab="ai" />;
+      return <Main />;
+    case "settings": {
+      const page = pickSettingsPage(params.get("page"));
+      if (page === "shortcut") return windowShell(<SettingsView section="shortcuts" />);
+      if (page === "save") return windowShell(<SettingsView section="general" />);
+      return <MoreSettings initialTab={pickMoreTab(params.get("tab"))} />;
+    }
+    case "about":
+      return windowShell(<About />);
     case "overlay":
     default:
       return <Overlay monitorId={Number(params.get("monitor") ?? 0)} />;

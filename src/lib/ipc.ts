@@ -70,6 +70,13 @@ export type Preset = {
 /** Where in-app updates download from; the CNB mirror is the default. */
 export type UpdateSource = "cnb" | "github";
 
+/** The popover menu's settings secondary windows. */
+export type SettingsWindowPage = "shortcut" | "save" | "more";
+
+/** Top tabs of the 更多设置 window. The first three are SettingsView
+ * sections; `update` swaps in the update panel. */
+export type MoreSettingsTab = "ai" | "general" | "shortcuts" | "update";
+
 export type Settings = {
   baseUrl: string;
   model: string;
@@ -264,7 +271,16 @@ export const api = {
   listModels: (baseUrl: string, apiKey: string | null) =>
     invoke<string[]>("list_models", { baseUrl, apiKey }),
   copyText: (text: string) => invoke<void>("copy_text_to_clipboard", { text }),
-  openSettings: () => invoke<void>("open_settings_window"),
+  /** Open a settings secondary window (`shortcut` / `save` / `more`). */
+  openSettings: (page?: SettingsWindowPage, tab?: MoreSettingsTab) =>
+    invoke<void>("open_settings_window", { page: page ?? null, tab: tab ?? null }),
+  openAbout: () => invoke<void>("open_about_window"),
+  /** Launch-at-login login item — the OS is the only source of truth. */
+  autostartStatus: () => invoke<boolean>("autostart_status"),
+  setAutoStart: (enabled: boolean) =>
+    invoke<void>("set_autostart", { enabled }),
+  /** Quit the app (popover menu 退出, same as the tray's). */
+  exitApp: () => invoke<void>("exit_app"),
   openMain: (tab?: "gallery" | "ai" | "general" | "shortcuts" | "about") =>
     invoke<void>("open_main_window", { tab: tab ?? null }),
   listGallery: () => invoke<GalleryItem[]>("list_gallery"),
@@ -401,6 +417,10 @@ export const events = {
   /** Fired when the tray asks the main window to switch section. */
   onUiTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://tab", (e) => cb(e.payload)),
+  /** Fired when a reused 更多设置 window is steered to another top tab
+   *  (tray 设置…, the AI window's 去设置). */
+  onSettingsTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
+    listen<string>("settings://tab", (e) => cb(e.payload)),
   /* Long screenshot events (reference names, emitted by Rust). */
   /** Rust → panel: initial window geometry + selection bounds. */
   onScrollScreenshotData: (cb: (d: ScrollScreenshotData) => void): Promise<UnlistenFn> =>

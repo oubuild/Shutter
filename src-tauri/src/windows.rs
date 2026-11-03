@@ -76,21 +76,17 @@ pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f6
     Ok(win)
 }
 
-/// Open (or refocus) the main window: gallery, the three settings panes and
-/// about in one shell.
-///
-/// `tab` selects the initial section (`gallery` / `ai` / `general` /
-/// `shortcuts` / `about`). When the window already exists it is focused and
-/// asked to switch tabs through `ui://tab` rather than being recreated, which
-/// keeps the gallery scroll position and avoids a visible reload.
+/// Open (or refocus) the main window: the gallery shell. `tab` is legacy
+/// (only `gallery` is used now that settings live in their own fixed windows);
+/// when the window already exists it is only shown and focused — never
+/// recreated, which keeps the gallery scroll position.
 pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
         let _ = win.unminimize();
         focus_when_ready(win.clone());
-        use tauri::Emitter;
-        let _ = win.emit("ui://tab", tab);
+        let _ = tab;
         return Ok(win);
     }
 
@@ -100,9 +96,12 @@ pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
         WebviewUrl::App(format!("index.html?view=main&tab={tab}").into()),
     )
     .title("Shutter")
-    .inner_size(1080.0, 720.0)
-    .min_inner_size(760.0, 520.0)
-    .resizable(true);
+    // The gallery is a fixed companion strip (like the reference tool):
+    // 400×740, not resizable or maximizable.
+    .inner_size(400.0, 740.0)
+    .min_inner_size(400.0, 740.0)
+    .maximizable(false)
+    .resizable(false);
 
     // Keep the native window frame: the OS owns the traffic lights on macOS and
     // the caption buttons on Windows/Linux, so behaviour (close, minimise,
@@ -132,9 +131,103 @@ pub fn open_main(app: &AppHandle, tab: &str) -> Result<WebviewWindow> {
 }
 
 /// Open the settings area of the main window on its first pane (AI 服务).
+///
+/// Since the settings moved out of the main window into fixed auxiliary
+/// windows (popover menu → 二级窗口), this steers to 更多设置 on AI 服务.
 pub fn open_settings(app: &AppHandle) -> Result<()> {
-    open_main(app, "ai")?;
+    open_settings_page(app, "more", Some("ai"))?;
     Ok(())
+}
+
+/// A fixed-size auxiliary window with the standard OS title bar. Reopening
+/// reuses the live window (show + focus) instead of stacking copies — the
+/// settings forms keep unsaved state, and recreating would flash "加载中…".
+pub fn open_fixed_window(
+    app: &AppHandle,
+    label: &str,
+    title: &str,
+    query: &str,
+    w: f64,
+    h: f64,
+) -> Result<WebviewWindow> {
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        focus_when_ready(win.clone());
+        return Ok(win);
+    }
+    let win = WebviewWindowBuilder::new(
+        app,
+        label,
+        WebviewUrl::App(format!("index.html?{query}").into()),
+    )
+    .title(title)
+    .inner_size(w, h)
+    .min_inner_size(w, h)
+    .resizable(false)
+    .maximizable(false)
+    .transparent(false)
+    .visible(true)
+    .center()
+    .build()?;
+    focus_when_ready(win.clone());
+    log::info!("fixed window {label} built: {:?}", win.inner_size());
+    Ok(win)
+}
+
+/// The settings secondary windows opened from the popover menu, the tray and
+/// the AI window. `page` is one of `shortcut` / `save` / `more`; only `more`
+/// takes a `tab` (its top tab bar). A `more` window that already exists is
+/// steered to the tab through `settings://tab` rather than rebuilt.
+pub fn open_settings_page(
+    app: &AppHandle,
+    page: &str,
+    tab: Option<&str>,
+) -> Result<WebviewWindow> {
+    match page {
+        "shortcut" => open_fixed_window(
+            app,
+            "settings_shortcut",
+            "快捷键设置",
+            "view=settings&page=shortcut",
+            460.0,
+            560.0,
+        ),
+        "save" => open_fixed_window(
+            app,
+            "settings_save",
+            "保存设置",
+            "view=settings&page=save",
+            460.0,
+            540.0,
+        ),
+        _ => {
+            let tab = tab.unwrap_or("ai");
+            if let Some(win) = app.get_webview_window("settings_more") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+                focus_when_ready(win.clone());
+                use tauri::Emitter;
+                let _ = win.emit("settings://tab", tab);
+                return Ok(win);
+            }
+            open_fixed_window(
+                app,
+                "settings_more",
+                "更多设置",
+                &format!("view=settings&page=more&tab={tab}"),
+                640.0,
+                660.0,
+            )
+        }
+    }
+}
+
+/// The about window (menu 关于 Shutter).
+pub fn open_about(app: &AppHandle) -> Result<WebviewWindow> {
+    open_fixed_window(app, "about", "关于 Shutter", "view=about", 560.0, 680.0)
 }
 
 /// Bring a freshly built window to the front once it is actually on screen.
@@ -375,7 +468,7 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = open_settings(app);
             }
             "shortcuts" => {
-                let _ = open_main(app, "shortcuts");
+                let _ = open_settings_page(app, "shortcut", None);
             }
             "quit" => app.exit(0),
             _ => {}

@@ -44,9 +44,9 @@ export default defineConfig({
       // the antfu vocabulary but restores the button affordance.
       overrides: {
         "btn-action":
-          "border border-neutral-300 rounded flex gap-2 items-center px2.5 py1.5 color-base hover:bg-hover hover:border-neutral-400 transition disabled:pointer-events-none disabled:op40! outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
+          "border border-neutral-300 dark:border-neutral-700 rounded flex gap-2 items-center px2.5 py1.5 color-base hover:bg-hover hover:border-neutral-400 dark:hover:border-neutral-600 transition disabled:pointer-events-none disabled:op40! outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
         "btn-primary":
-          "px2.5 py1.5 rounded border border-transparent flex gap-2 items-center bg-primary-500 hover:bg-primary-600 text-white font-500 transition disabled:op50 disabled:pointer-events-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
+          "px2.5 py1.5 rounded border border-transparent flex gap-2 items-center bg-primary-500 hover:bg-primary-600 dark:bg-neutral-200 dark:hover:bg-white dark:text-neutral-900 text-white font-500 transition disabled:op50 disabled:pointer-events-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
       },
     }),
     presetWind3(),
@@ -57,7 +57,24 @@ export default defineConfig({
   preflights: [
     {
       getCSS: () => `
+:root {
+  --sh-surface: #FFFFFF;
+  --sh-surface-alt: #F5F6F8;
+  --sh-ink: #24262B;
+  --sh-ink-dim: #858A94;
+  --sh-line: #E5E7EB;
+  --sh-line-strong: #D8DBE0;
+}
+.dark {
+  --sh-surface: #1D1D20;
+  --sh-surface-alt: #2C2C30;
+  --sh-ink: #E6E6E9;
+  --sh-ink-dim: #9B9BA2;
+  --sh-line: #35353A;
+  --sh-line-strong: #48484E;
+}
 *, ::before, ::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: #e5e7eb; }
+.dark *, .dark ::before, .dark ::after { border-color: #35353a; }
 html, body, #root { height: 100%; margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
@@ -70,6 +87,7 @@ body {
 button { font: inherit; color: inherit; cursor: pointer; background: transparent; padding: 0; }
 input, textarea, select { font: inherit; color: inherit; }
 * { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.22) transparent; }
+.dark * { scrollbar-color: rgba(255, 255, 255, 0.24) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -78,9 +96,13 @@ input, textarea, select { font: inherit; color: inherit; }
   background-clip: content-box;
   border-radius: 999px;
 }
+.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.24); background-clip: content-box; border: 2px solid transparent; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.34); background-clip: content-box; border: 2px solid transparent; }
+.dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.36); background-clip: content-box; border: 2px solid transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
 @keyframes thumb-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
+@keyframes menu-pop { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.menu-pop { animation: menu-pop 170ms cubic-bezier(0.16, 1, 0.3, 1); }
 `,
     },
   ],
@@ -89,12 +111,14 @@ input, textarea, select { font: inherit; color: inherit; }
       sans: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif',
       mono: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace',
     },
-    // Shutter AI visual spec. Plain hex tokens (not the OKLCH antfu scales)
-    // so a future dark theme only has to swap these values.
+    // Shutter AI visual spec. CSS-variable tokens (not the OKLCH antfu
+    // scales) so the dark theme only swaps the variable block in preflights.
+    // Plain vars — not rgb(...) triples — because these are never used with
+    // opacity modifiers (Safari 15 has no color-mix for that anyway).
     colors: {
-      surface: { DEFAULT: "#FFFFFF", alt: "#F5F6F8" },
-      ink: { DEFAULT: "#24262B", dim: "#858A94" },
-      line: { DEFAULT: "#E5E7EB", strong: "#D8DBE0" },
+      surface: { DEFAULT: "var(--sh-surface)", alt: "var(--sh-surface-alt)" },
+      ink: { DEFAULT: "var(--sh-ink)", dim: "var(--sh-ink-dim)" },
+      line: { DEFAULT: "var(--sh-line)", strong: "var(--sh-line-strong)" },
     },
   },
   shortcuts: {

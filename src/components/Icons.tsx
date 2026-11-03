@@ -142,3 +142,71 @@ export function IconOverlay(props: IconProps) {
     </Glyph>
   );
 }
+
+/** The header settings entry: a gear (macOS 设置 convention, Feather-style
+ *  outline so it sits in the same family as the other glyphs). */
+export function IconSettings(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </Glyph>
+  );
+}
+
+/** Disclose chevron for popover rows that open a secondary window. */
+export function IconChevronRight(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M9.5 6.5l5 5.5-5 5.5" />
+    </Glyph>
+  );
+}
+
+/** Close ✕ for the preview layer's floating button. */
+export function IconX(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 6l12 12" />
+      <path d="M18 6L6 18" />
+    </Glyph>
+  );
+}
+
+export function IconMinus(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M5.5 12h13" />
+    </Glyph>
+  );
+}
+
+export function IconPlus(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M12 5.5v13" />
+      <path d="M5.5 12h13" />
+    </Glyph>
+  );
+}
+
+/** Copy action (the preview panel's primary button). */
+export function IconCopy(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <rect x="9" y="9" width="12" height="12" rx="2.2" />
+      <path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5" />
+    </Glyph>
+  );
+}
+
+/** Trash for the preview panel's quiet delete. */
+export function IconTrash(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 6.5h17" />
+      <path d="M18.5 6.5V19a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V6.5" />
+      <path d="M8.5 6.5V4.8A1.8 1.8 0 0 1 10.3 3h3.4a1.8 1.8 0 0 1 1.8 1.8v1.7" />
+    </Glyph>
+  );
+}

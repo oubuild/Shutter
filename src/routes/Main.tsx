@@ -1,171 +1,76 @@
 /**
- * Main window shell: a rounded card with a left nav and one section per
- * destination.
+ * Main window: the gallery plus a slim header carrying the settings entry.
  *
- * Window chrome is the OS's: `windows::open_main` keeps native decorations on
- * every platform, so macOS draws its traffic lights and Windows/Linux draw
- * their caption buttons. macOS additionally uses the overlay title-bar style,
- * which transparently extends the webview under the title bar — that is why
- * the header below leaves a 92px gutter for the traffic lights and carries the
- * drag region.
+ * The settings used to live here as nav tabs; they are now a popover menu
+ * under the header's gear button (see SettingsMenu) whose secondary pages
+ * open as separate fixed windows (`windows::open_settings_page`), so this
+ * shell renders exactly one pane — the gallery — and keeps it mounted for the
+ * window's whole life. The window itself is a fixed 400×740 companion strip
+ * (`windows::open_main`), so there is no zoom-on-double-click to wire.
  *
- * On Windows/Linux the native title bar already provides the app title and the
- * drag behaviour, so the custom header is not rendered there.
- *
- * All panes stay mounted and are hidden with `hidden`; switching tabs is
- * therefore a paint, not a remount. That keeps the gallery thumbnails, the
- * settings form state and every scroll position, and it removes the flash of
- * "加载中…" a remount used to show on every switch.
+ * Window chrome stays the OS's: macOS draws its traffic lights over the view
+ * (the header leaves a 92px gutter and carries the drag region),
+ * Windows/Linux have their native title bar and get the same slim header only
+ * so the settings button exists there too.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { events } from "../lib/ipc";
+import { useRef, useState } from "react";
 import { IS_MAC } from "../lib/shortcut";
+import { IconSettings } from "../components/Icons";
+import { SettingsMenu } from "../components/SettingsMenu";
 import { Gallery } from "./Gallery";
-import { SettingsView, type SettingsSection } from "./Settings";
-import { About } from "./About";
 
-export type Tab = "gallery" | SettingsSection | "about";
+export function Main() {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "gallery", label: "图库" },
-  { id: "ai", label: "AI 服务" },
-  { id: "general", label: "通用" },
-  { id: "shortcuts", label: "快捷键" },
-  { id: "about", label: "关于" },
-];
-
-/** The three settings tabs render one shared SettingsView (see Settings.tsx). */
-function isSettingsTab(tab: Tab): tab is SettingsSection {
-  return tab === "ai" || tab === "general" || tab === "shortcuts";
-}
-
-function isTab(value: string | null): value is Tab {
-  return (
-    value === "gallery" ||
-    value === "about" ||
-    (value !== null && isSettingsTab(value as Tab))
-  );
-}
-
-export function Main({ initialTab }: { initialTab: Tab }) {
-  const [tab, setTab] = useState<Tab>(initialTab);
-  /**
-   * Panes are mounted on first visit and then kept alive, so switching is a
-   * paint and form/scroll state survives. Mounting all panes at launch instead
-   * would make the gallery load thumbnails in the background while the user is
-   * still on another tab, which is what made startup feel heavy.
-   *
-   * The three settings tabs share the single "settings" slot: they are one
-   * SettingsView whose `section` prop swaps, never a remount.
-   */
-  const [mounted, setMounted] = useState<Record<"gallery" | "settings" | "about", boolean>>({
-    gallery: initialTab === "gallery",
-    settings: isSettingsTab(initialTab),
-    about: initialTab === "about",
-  });
-
-  useEffect(() => {
-    setMounted((prev) => {
-      const key = isSettingsTab(tab) ? "settings" : tab;
-      return prev[key] ? prev : { ...prev, [key]: true };
-    });
-  }, [tab]);
-
-  // The tray reopens the existing window and steers it through this event, so
-  // the window is never recreated (which would reset gallery scroll position).
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let alive = true;
-    events
-      .onUiTab((next) => {
-        if (isTab(next)) setTab(next);
-      })
-      .then((fn) => {
-        if (alive) unlisten = fn;
-        else fn();
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, []);
-
-  // Double-click-to-zoom is the macOS convention; the hidden title bar means
-  // the system cannot do it for us.
-  const onHeaderDoubleClick = useCallback(() => {
-    void getCurrentWindow()
-      .toggleMaximize()
-      .catch(() => undefined);
-  }, []);
+  const headerProps = IS_MAC
+    ? { "data-tauri-drag-region": true }
+    : {};
 
   return (
-    <div className="flex h-full w-full bg-secondary font-sans text-compact color-base" data-platform={IS_MAC ? "macos" : "other"}>
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-secondary">
-        {IS_MAC && (
-          <header
-            className="flex h-13 flex-none select-none items-center gap-3 border-b border-base bg-base/85 pl-[92px] pr-4"
-            data-tauri-drag-region
-            onDoubleClick={onHeaderDoubleClick}
-          >
-            <div className="ml-3.5 min-w-0 truncate text-compact font-600 tracking-wide color-muted" data-tauri-drag-region>
-              Shutter
-            </div>
-            {/* The tab breadcrumb keeps the title from sitting alone: the
-                header otherwise reads as an unfinished strip until the eye
-                drops to the nav. All of it stays a drag region. */}
-            <span className="color-faint" data-tauri-drag-region>
-              /
-            </span>
-            <div className="min-w-0 truncate text-compact color-faint" data-tauri-drag-region>
-              {TABS.find((t) => t.id === tab)?.label}
-            </div>
-          </header>
-        )}
-
-        <div className="flex min-h-0 flex-1">
-          <nav className="flex w-[152px] flex-none flex-col gap-0.5 border-r border-base bg-secondary p-3">
-            {TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`w-full rounded-md px-2.5 py-2 text-left text-compact transition-none ${
-                  tab === item.id
-                    ? "bg-primary-500/10 font-600 color-primary-600"
-                    : "border border-transparent color-muted hover:bg-hover hover:color-base"
-                }`}
-                aria-current={tab === item.id ? "page" : undefined}
-                onClick={() => setTab(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          <main className="flex min-h-0 min-w-0 flex-1">
-            {mounted.gallery && (
-              <div className={tab === "gallery" ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
-                <Gallery active={tab === "gallery"} />
-              </div>
-            )}
-            {mounted.settings && (
-              <div className={isSettingsTab(tab) ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
-                <SettingsView
-                  section={isSettingsTab(tab) ? tab : "ai"}
-                  active={isSettingsTab(tab)}
-                />
-              </div>
-            )}
-            {mounted.about && (
-              <div className={tab === "about" ? "flex min-h-0 min-w-0 flex-1" : "hidden"}>
-                <About />
-              </div>
-            )}
-          </main>
+    <div
+      className="flex h-full w-full flex-col overflow-hidden bg-secondary font-sans text-compact color-base"
+      data-platform={IS_MAC ? "macos" : "other"}
+    >
+      <header
+        className={`relative flex h-13 flex-none select-none items-center gap-3 border-b border-base bg-base/85 pr-4 ${
+          IS_MAC ? "pl-[92px]" : "pl-4"
+        }`}
+        {...headerProps}
+      >
+        <div
+          className="ml-3.5 min-w-0 truncate text-compact font-600 tracking-wide color-muted"
+          data-tauri-drag-region={IS_MAC ? true : undefined}
+        >
+          Shutter
         </div>
-      </div>
+
+        <div className="flex flex-1 justify-end" data-tauri-drag-region={IS_MAC ? true : undefined}>
+          <button
+            ref={settingsBtnRef}
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg color-muted transition-colors duration-100 outline-none hover:bg-hover hover:color-base focus-visible:ring-2 focus-visible:ring-primary-500/40"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="设置"
+            title="设置"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <IconSettings size={16} />
+          </button>
+        </div>
+
+        <SettingsMenu
+          open={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          triggerRef={settingsBtnRef}
+        />
+      </header>
+
+      <main className="flex min-h-0 min-w-0 flex-1">
+        <Gallery />
+      </main>
     </div>
   );
 }
