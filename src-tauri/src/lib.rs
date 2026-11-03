@@ -175,6 +175,61 @@ pub fn run() {
                 });
             }
 
+            // Drive the overlay → long-screenshot handover without a mouse:
+            // fires the capture first (see above), then hands a fixed
+            // selection to `open_scroll_screenshot_event` exactly the way the
+            // overlay toolbar does.
+            #[cfg(feature = "debug-hooks")]
+            if std::env::var("CAP_PHOTO_SCROLL_ON_START").is_ok() {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(2600));
+                    let payload = {
+                        let Ok((monitors, _)) = crate::capture::capture_all() else {
+                            log::error!("scroll-on-start: cannot enumerate displays");
+                            return;
+                        };
+                        let m = &monitors[0];
+                        crate::scroll::types::OpenScroll {
+                            x: (m.width as f64 * 0.25).round(),
+                            y: (m.height as f64 * 0.25).round(),
+                            bounds_width: (m.width as f64 * 0.5).round(),
+                            bounds_height: (m.height as f64 * 0.4).round(),
+                            monitor_ids: m.id,
+                            selection_scale_factor: m.scale_factor,
+                        }
+                    };
+                    log::info!("scroll-on-start: firing handover {payload:?}");
+                    let result = tauri::async_runtime::block_on(
+                        commands::open_scroll_screenshot_event(handle.clone(), payload.clone()),
+                    );
+                    match result {
+                        Ok(()) => log::info!("scroll-on-start: handover ok"),
+                        Err(e) => log::error!("scroll-on-start failed: {e}"),
+                    }
+                    // Optionally drive the panel's 开始 click too, so the
+                    // control bar + handshake watchdog path gets exercised
+                    // without a mouse.
+                    if std::env::var("CAP_PHOTO_SCROLL_AUTOSTART").is_ok() {
+                        std::thread::sleep(std::time::Duration::from_millis(4000));
+                        let start = crate::scroll::types::StartScroll {
+                            x: payload.x + 3.0,
+                            y: payload.y + 3.0,
+                            width: payload.bounds_width - 6.0,
+                            height: payload.bounds_height - 6.0,
+                            scale_factor: payload.selection_scale_factor,
+                        };
+                        log::info!("scroll-on-start: firing start {start:?}");
+                        match tauri::async_runtime::block_on(
+                            commands::start_scroll_screenshot_event(handle.clone(), start),
+                        ) {
+                            Ok(()) => log::info!("scroll-on-start: start ok"),
+                            Err(e) => log::error!("scroll-on-start start failed: {e}"),
+                        }
+                    }
+                });
+            }
+
             // Warm ScreenCaptureKit once: the first capture in a fresh process
             // pays a large one-off cost, which users feel as a laggy hotkey.
             std::thread::spawn(|| {
