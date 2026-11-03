@@ -37,7 +37,7 @@ pub struct CaptureSession {
 }
 
 /// Selection rectangle in CSS px, relative to the monitor origin.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rect {
     pub x: f64,

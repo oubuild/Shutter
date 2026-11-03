@@ -330,18 +330,15 @@ async fn do_confirm(
             windows::open_chat(&app, Some(&crop_id), ai_action.as_deref())?;
         }
         CaptureAction::Pin => {
-            // Reference parity (`pin_panel_*`): the pin lands exactly where the
+            // Reference parity (`pin_panel_*`): the pin lands where the
             // selection was, 1:1 in logical points — the window is the image
-            // plus a transparent 20px card frame on every side.
+            // plus a transparent 20px card frame on every side. Oversized
+            // selections shrink to 80% of the monitor so the padded card can
+            // never overflow and get clamped into a misaligned ghost.
             let monitor = session
                 .monitor(monitor_id)
                 .ok_or_else(|| anyhow::anyhow!("找不到显示器 {monitor_id}"))?;
-            let frame = Rect {
-                x: monitor.x as f64 + rect.x - pin::FRAME_PAD,
-                y: monitor.y as f64 + rect.y - pin::FRAME_PAD,
-                width: rect.width + pin::FRAME_PAD * 2.0,
-                height: rect.height + pin::FRAME_PAD * 2.0,
-            };
+            let frame = pin::frame_for(monitor, rect);
             pin::ensure(&app, &crop_id, frame)?;
         }
         _ => {}

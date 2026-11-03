@@ -16,10 +16,13 @@ import { api, errorText } from "../lib/ipc";
 /**
  * Floating always-on-top pin window — stroke-by-stroke port of the reference
  * `assets_index-CM6hgQ3v.js` (`pin_panel_*`): a padded rounded image card that
- * lands 1:1 at the selection, zooms with the wheel (step 0.1, smallest side
- * 150px, largest 8× the initial size, live % badge) and resizes through
- * aspect-locked invisible edge zones that anchor the opposite side. Drag to
- * move, hover for the action circles, Escape closes only while focused.
+ * lands 1:1 at the selection (oversized selections are shrunk Rust-side so
+ * the padded card always fits the monitor), zooms with the wheel (step 0.1,
+ * smallest side 150px, largest 8× the initial size, live % badge) and resizes
+ * through aspect-locked edge zones that straddle the visible card border and
+ * light it on hover; geometry writes are coalesced per frame so the card
+ * tracks the cursor. Drag to move, hover for the action circles (on the
+ * card's corner), Escape closes only while focused.
  */
 
 const MIN_SIDE = 150;
@@ -78,7 +81,9 @@ export function Pin({ pinId }: { pinId: string }) {
   /** Active edge drag; null while not resizing. */
   const resizeRef = useRef<{
     dir: ZoneDir;
-    startClient: Pos;
+    /** Cursor in SCREEN px: client px shift under a moving window and would
+     *  feed the resize math its own output (see the drag handler). */
+    startScreen: Pos;
     startSize: Size;
     startPos: Pos;
   } | null>(null);
@@ -217,6 +222,43 @@ export function Pin({ pinId }: { pinId: string }) {
 
   /* ------------------------------------------- aspect-locked edge resize */
 
+  /**
+   * Geometry writes are coalesced into one per frame: every mousemove used to
+   * fire its own setSize/setPosition IPC round trip, which made the card
+   * visibly stutter behind the cursor on Retina displays.
+   */
+  const rafRef = useRef<number | null>(null);
+  const pendingRef = useRef<{ size: LogicalSize; pos: LogicalPosition | null } | null>(null);
+  /** Last geometry actually sent, to drop no-op IPC at clamp boundaries. */
+  const lastSentRef = useRef<string | null>(null);
+  const sendGeometry = useCallback((pending: { size: LogicalSize; pos: LogicalPosition | null }) => {
+    const key = `${pending.size.width}x${pending.size.height}@${pending.pos?.x ?? -1},${pending.pos?.y ?? -1}`;
+    if (key === lastSentRef.current) return;
+    lastSentRef.current = key;
+    const win = getCurrentWindow();
+    const moves = [win.setSize(pending.size)];
+    if (pending.pos !== null) moves.push(win.setPosition(pending.pos));
+    void Promise.all(moves).catch(() => undefined);
+  }, []);
+  const applyGeometry = useCallback((size: LogicalSize, pos: LogicalPosition | null) => {
+    pendingRef.current = { size, pos };
+    if (rafRef.current !== null) return;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      const pending = pendingRef.current;
+      pendingRef.current = null;
+      if (pending !== null) sendGeometry(pending);
+    });
+  }, [sendGeometry]);
+  const flushGeometry = useCallback(() => {
+    if (rafRef.current === null) return;
+    window.cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    if (pending !== null) sendGeometry(pending);
+  }, [sendGeometry]);
+
   const onZoneDown = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>, dir: ZoneDir) => {
       if (event.button !== 0) return;
@@ -231,7 +273,7 @@ export function Pin({ pinId }: { pinId: string }) {
         ]);
         resizeRef.current = {
           dir,
-          startClient: { x: event.clientX, y: event.clientY },
+          startScreen: { x: event.screenX, y: event.screenY },
           startSize: {
             w: Math.round(inner.width / scale),
             h: Math.round(inner.height / scale),
@@ -248,14 +290,21 @@ export function Pin({ pinId }: { pinId: string }) {
 
   // One pair of document listeners drives whichever zone is held, mirroring
   // the reference (mousemove/mouseup mounted once, state kept in refs).
+  //
+  // Deltas MUST come from screenX/screenY, not clientX/clientY: an anchored
+  // drag (left/top edge, corners) moves the window itself, which shifts the
+  // client coordinate of a stationary cursor by the very amount the window
+  // just moved. Feeding that back into dx makes the resize chase its own
+  // tail — the card visibly jitters and lags behind the cursor. Screen
+  // coordinates never move under the window.
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
       const r = resizeRef.current;
       const init = initRef.current;
       if (!r || init.w <= 0) return;
       const ratio = init.w / init.h;
-      const dx = event.clientX - r.startClient.x;
-      const dy = event.clientY - r.startClient.y;
+      const dx = event.screenX - r.startScreen.x;
+      const dy = event.screenY - r.startScreen.y;
       let { w, h } = r.startSize;
       let x = r.startPos.x;
       let y = r.startPos.y;
@@ -311,18 +360,23 @@ export function Pin({ pinId }: { pinId: string }) {
           break;
       }
       const clamped = clampSize(w, h, init);
-      if (clamped.w !== w) x = r.startPos.x + r.startSize.w - clamped.w;
-      if (clamped.h !== h) y = r.startPos.y + r.startSize.h - clamped.h;
-      const win = getCurrentWindow();
-      const moves = [win.setSize(new LogicalSize(clamped.w, clamped.h))];
-      if (anchored) moves.push(win.setPosition(new LogicalPosition(Math.round(x), Math.round(y))));
-      void Promise.all(moves).catch(() => undefined);
+      // Re-anchor only along the axes this zone anchors: a right-edge drag
+      // hitting the size cap must not also slide the window left.
+      if (clamped.w !== w && r.dir.includes("left")) x = r.startPos.x + r.startSize.w - clamped.w;
+      if (clamped.h !== h && r.dir.includes("top")) y = r.startPos.y + r.startSize.h - clamped.h;
+      applyGeometry(
+        new LogicalSize(clamped.w, clamped.h),
+        anchored || clamped.w !== w || clamped.h !== h
+          ? new LogicalPosition(Math.round(x), Math.round(y))
+          : null,
+      );
       curRef.current = clamped;
     };
     const onUp = () => {
       const r = resizeRef.current;
       if (!r) return;
       resizeRef.current = null;
+      flushGeometry();
       const init = initRef.current;
       if (init.w > 0) {
         zoomRef.current = Math.min(ZOOM_MAX, curRef.current.w / init.w);
@@ -350,16 +404,30 @@ export function Pin({ pinId }: { pinId: string }) {
     [showHint],
   );
 
+  /** Which resize zone the cursor is over, to light the matching card edge. */
+  const [edgeHover, setEdgeHover] = useState<ZoneDir | null>(null);
+
+  // The zones straddle the visible card border (the 20px transparent pad plus
+  // a slice of the image), so the resize grab lives ON the card edge the eye
+  // sees instead of in the invisible margin around it.
   const ZONES: Array<{ dir: ZoneDir; style: CSSProperties; cursor: string }> = [
-    { dir: "top", style: { left: 0, right: 0, top: 0, height: 4 }, cursor: "ns-resize" },
-    { dir: "bottom", style: { left: 0, right: 0, bottom: 0, height: 4 }, cursor: "ns-resize" },
-    { dir: "left", style: { left: 0, top: 0, bottom: 0, width: 4 }, cursor: "ew-resize" },
-    { dir: "right", style: { right: 0, top: 0, bottom: 0, width: 4 }, cursor: "ew-resize" },
-    { dir: "top-left", style: { left: 0, top: 0, width: 10, height: 10 }, cursor: "nwse-resize" },
-    { dir: "top-right", style: { right: 0, top: 0, width: 10, height: 10 }, cursor: "nesw-resize" },
-    { dir: "bottom-left", style: { left: 0, bottom: 0, width: 10, height: 10 }, cursor: "nesw-resize" },
-    { dir: "bottom-right", style: { right: 0, bottom: 0, width: 10, height: 10 }, cursor: "nwse-resize" },
+    { dir: "top", style: { left: 0, right: 0, top: 0, height: 26 }, cursor: "ns-resize" },
+    { dir: "bottom", style: { left: 0, right: 0, bottom: 0, height: 26 }, cursor: "ns-resize" },
+    { dir: "left", style: { left: 0, top: 0, bottom: 0, width: 26 }, cursor: "ew-resize" },
+    { dir: "right", style: { right: 0, top: 0, bottom: 0, width: 26 }, cursor: "ew-resize" },
+    { dir: "top-left", style: { left: 0, top: 0, width: 26, height: 26 }, cursor: "nwse-resize" },
+    { dir: "top-right", style: { right: 0, top: 0, width: 26, height: 26 }, cursor: "nesw-resize" },
+    { dir: "bottom-left", style: { left: 0, bottom: 0, width: 26, height: 26 }, cursor: "nesw-resize" },
+    { dir: "bottom-right", style: { right: 0, bottom: 0, width: 26, height: 26 }, cursor: "nwse-resize" },
   ];
+
+  /** Highlight bars drawn on the card border for the hovered zone. */
+  const EDGE_HL: Record<"top" | "bottom" | "left" | "right", CSSProperties> = {
+    top: { left: 20, right: 20, top: 19, height: 2 },
+    bottom: { left: 20, right: 20, bottom: 19, height: 2 },
+    left: { top: 20, bottom: 20, left: 19, width: 2 },
+    right: { top: 20, bottom: 20, right: 19, width: 2 },
+  };
 
   if (error !== null) {
     return <div className="pin-root"><div className="pin-error">{error}</div></div>;
@@ -369,12 +437,20 @@ export function Pin({ pinId }: { pinId: string }) {
   return (
     <div className="pin-root" onMouseDown={onMouseDown}>
       <img src={dataUrl} alt="" draggable={false} />
+      {edgeHover !== null &&
+        (["top", "bottom", "left", "right"] as const)
+          .filter((side) => edgeHover.includes(side))
+          .map((side) => <div key={side} className="pin-edge-hl" style={EDGE_HL[side]} />)}
       {ZONES.map(({ dir, style, cursor }) => (
         <div
           key={dir}
           className="pin-zone"
           style={{ ...style, cursor }}
           onMouseDown={(e) => onZoneDown(e, dir)}
+          onMouseEnter={() => setEdgeHover(dir)}
+          onMouseLeave={() =>
+            setEdgeHover((cur) => (cur === dir ? null : cur))
+          }
         />
       ))}
       <div className="pin-actions" onMouseDown={(e) => e.stopPropagation()}>
