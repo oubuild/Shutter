@@ -69,16 +69,36 @@ fn preview_path(_app: &AppHandle) -> Result<std::path::PathBuf> {
     Ok(dir.join("screen_scroll.png"))
 }
 
-/// Global pointer position in display points (macOS `CGEventGetLocation`).
+/// Global pointer position in display points (top-left origin, y-down — the
+/// same space as `CGWindowBounds`).
+///
+/// The documented pattern: `CGEventCreate(NULL)` synthesises an event carrying
+/// the current time and mouse location, and `CGEventGetLocation(event)` reads
+/// it back. The previous binding called `CGEventGetLocation` with no argument
+/// at all — the symbol still links (same name) but the missing `CGEventRef`
+/// parameter resolved to a garbage register value, so the "pointer inside the
+/// selection" test was permanently false and the armed scroller never started,
+/// no matter where the mouse actually was.
 #[cfg(target_os = "macos")]
 fn mouse_location() -> (f64, f64) {
     use core_graphics::geometry::CGPoint;
+
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
-        fn CGEventGetLocation() -> CGPoint;
+        fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
+        fn CFRelease(cf: *mut std::ffi::c_void);
     }
-    let p = unsafe { CGEventGetLocation() };
-    (p.x, p.y)
+
+    unsafe {
+        let event = CGEventCreate(std::ptr::null());
+        if event.is_null() {
+            return (f64::NAN, f64::NAN);
+        }
+        let p = CGEventGetLocation(event);
+        CFRelease(event);
+        (p.x, p.y)
+    }
 }
 
 /// Shared control block: the command surface flips these, the worker reads.

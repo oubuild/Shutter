@@ -455,7 +455,7 @@ function SizeBadge({
       className="scrollpanel-size"
       style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
     >
-      {`${Math.round(bounds.width)}*${Math.round(bounds.height)}`}
+      {`${Math.round(bounds.width)} × ${Math.round(bounds.height)}`}
     </div>
   );
 }
@@ -492,6 +492,15 @@ export function ScrollScreen() {
   const [barBox, setBarBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [errorTip, setErrorTip] = useState<string | null>(null);
   const [hideStartTip, setHideStartTip] = useState(false);
+  /**
+   * The scroll session has been started (the 1500ms arm fired the invoke).
+   * From here the bottom control bar owns the flow — 停止/下载/保存 — so the
+   * panel's own bar, start tip and resize handles must stay hidden even when
+   * recording pauses or auto-stops at the page bottom. Otherwise the panel
+   * bar (开始滚动) resurrects next to the live control bar (停止滚动) and the
+   * two mutually exclusive toolbars share the screen.
+   */
+  const [sessionStarted, setSessionStarted] = useState(false);
 
   const barRef = useRef<HTMLDivElement | null>(null);
   const drawStart = useRef<{ x: number; y: number } | null>(null);
@@ -514,6 +523,7 @@ export function ScrollScreen() {
     setBounds(null);
     setIsRecording(false);
     setIsStart(false);
+    setSessionStarted(false);
     setPreviewUrl("");
   }, []);
 
@@ -574,6 +584,7 @@ export function ScrollScreen() {
             setIsMove(true);
             setIsRecording(false);
             setIsStart(false);
+            setSessionStarted(false);
           }
         }),
         events.onScrollScreenshotClickStop(() => {
@@ -892,6 +903,7 @@ export function ScrollScreen() {
       if (beat.current !== myBeat || !b || !isRecordingRef.current) return;
       const scale = selScaleRef.current ?? window.devicePixelRatio;
       const rect = captureInset(b, scale);
+      setSessionStarted(true);
       void api
         .startScrollScreenshot({
           x: rect.x,
@@ -937,7 +949,7 @@ export function ScrollScreen() {
     [isRecording, canDraw, quit],
   );
 
-  const canResize = (bounds?.width ?? 0) > 0 && !isRecording;
+  const canResize = (bounds?.width ?? 0) > 0 && !isRecording && !sessionStarted;
 
   const barButtons: BarButton[] = [
     { id: "download", title: "下载", icon: ICONS.download, onClick: () => void onSaveAs() },
@@ -969,7 +981,7 @@ export function ScrollScreen() {
             className="scrollpanel-tips"
             style={{ position: "fixed", left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }}
           >
-            {!isRecording && !hideStartTip && (
+            {!isRecording && !sessionStarted && !hideStartTip && (
               <div className="scrollpanel-tip">点击开始滚动进行长截图</div>
             )}
             {isStart && (
@@ -1004,8 +1016,8 @@ export function ScrollScreen() {
         className="scrollpanel-bar"
         id="operation-btn"
         style={{
-          opacity: !isRecording && barPos && !isMove && bounds?.width ? 1 : 0,
-          pointerEvents: isRecording ? "none" : "auto",
+          opacity: !isRecording && !sessionStarted && barPos && !isMove && bounds?.width ? 1 : 0,
+          pointerEvents: isRecording || sessionStarted ? "none" : "auto",
           zIndex: 101,
           transform: `translate(${barPos?.x ?? 0}px, ${barPos?.y ?? 0}px)`,
           cursor: barDragging ? "grabbing" : "grab",
