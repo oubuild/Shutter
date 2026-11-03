@@ -131,8 +131,11 @@ fn active() -> &'static Mutex<Option<ActiveSession>> {
 /// `scroll_screenshot_panel_<id>` window over the target monitor and park the
 /// seeded selection for `scroll_screenshot_data`.
 ///
-/// The overlay closes itself 100ms before this fires, so the panel opens onto
-/// the live screen — no frozen frame, unlike the screenshot overlay.
+/// This runs BEFORE the overlays close (see `open_scroll_screenshot_event`):
+/// the panel is created while a window still exists, so the window count
+/// never drops to zero mid-handover. The frozen overlay disappears beneath
+/// the transparent panel a beat later — the panel opens onto the live screen,
+/// no frozen frame, unlike the screenshot overlay.
 pub fn open_panel(app: &AppHandle, payload: OpenScroll) -> Result<()> {
     // Replace any running session first (reference epoch guard).
     teardown(app);

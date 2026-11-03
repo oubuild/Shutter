@@ -268,10 +268,20 @@ pub fn run() {
             if let RunEvent::ExitRequested { api, code, .. } = event {
                 // Closing the last window must not quit a menu-bar app.
                 if code.is_none() {
-                    // A scroll session owns threads and windows; stop it
-                    // before deciding, so ExitRequested from its teardown
-                    // cannot recurse.
-                    crate::scroll::teardown(_app);
+                    // A scroll session owns threads and windows; stop it once
+                    // its own windows are gone (the user closed them), so the
+                    // exit it would otherwise keep alive cannot recurse. A
+                    // session whose panel is still on screen must survive:
+                    // this event also fires on transient zero-window moments,
+                    // which used to tear a just-opened session down before its
+                    // panel ever mounted.
+                    let scroll_alive = _app
+                        .webview_windows()
+                        .keys()
+                        .any(|l| l.starts_with("scroll_screenshot_panel_") || l == "recorder_bar_panel");
+                    if !scroll_alive {
+                        crate::scroll::teardown(_app);
+                    }
                     api.prevent_exit();
                 }
             }
