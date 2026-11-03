@@ -48,6 +48,12 @@
     ],
     "category": "Utility",
     "shortDescription": "Screenshot, annotate, pin, and ask a vision model.",
+    "resources": [
+      "resources/THIRD-PARTY-NOTICES.txt",
+      "resources/ocr/README.md",
+      "resources/ocr/MODEL-SOURCES.md",
+      "resources/ocr/LICENSE-APACHE-2.0.txt"
+    ],
     "macOS": {
       "minimumSystemVersion": "12.0",
       "entitlements": "entitlements.plist",

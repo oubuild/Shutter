@@ -120,6 +120,44 @@ pub struct AiDone {
     pub error: Option<String>,
 }
 
+/// One extraction engine card in the 识别方式 picker.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrProviderInfo {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    /// Download size shown on model cards, e.g. "30 MB".
+    pub size_label: Option<String>,
+    /// False where the engine cannot run (model cards on unsupported
+    /// machines); the UI hides those cards entirely.
+    pub available: bool,
+    /// Model assets present in the local data dir (always true for cloud and
+    /// the system engine).
+    pub downloaded: bool,
+    pub current: bool,
+}
+
+/// Result of one local extraction run, returned by `ocr_extract`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrExtractResult {
+    pub request_id: String,
+    pub provider: String,
+    pub text: String,
+    pub elapsed_ms: u64,
+}
+
+/// Emitted as `ocr://download` while a model artifact streams in.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrDownloadProgress {
+    pub provider: String,
+    pub filename: String,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -146,6 +184,12 @@ pub struct Settings {
     /// (default, mainland-friendly) or GitHub Releases.
     #[serde(default = "default_update_source")]
     pub update_source: String,
+    /// Which extraction engine 提取文字 uses: cloud | system | ppocr | qota.
+    ///
+    /// Like `auto_save`, the serde default keeps settings files written before
+    /// this field existed loading instead of falling back to all-defaults.
+    #[serde(default = "default_ocr_provider")]
+    pub ocr_provider: String,
 }
 
 fn default_true() -> bool {
@@ -160,6 +204,11 @@ pub fn default_update_source() -> String {
     "cnb".into()
 }
 
+/// The system Vision engine — zero downloads, works out of the box.
+pub fn default_ocr_provider() -> String {
+    "system".into()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -171,6 +220,7 @@ impl Default for Settings {
             auto_save: true,
             capture_shortcut: default_capture_shortcut(),
             update_source: default_update_source(),
+            ocr_provider: default_ocr_provider(),
         }
     }
 }

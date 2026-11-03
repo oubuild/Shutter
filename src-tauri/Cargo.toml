@@ -38,6 +38,15 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Named only for `Update::download_url` in updater.rs.
 url = "2"
+# Local OCR (识图): the RapidOCR pipeline (det + rec) over ONNX Runtime for the
+# two optional downloadable models. Pure Rust — preprocessing is image/imageproc.
+rapidocr-core = "0.2.2"
+# rapidocr-core 0.2.2 is written against the rc.12 API (`Session::builder()`
+# with no arguments); newer rc's changed that signature, so the whole graph
+# must unify on exactly rc.12 (ONNX Runtime 1.24.2 via download-binaries).
+ort = "=2.0.0-rc.12"
+# Verify every downloaded model artifact before it can be installed.
+sha2 = "0.10"
 
 # The API key lives in the OS credential store. `keyring` picks its backend at
 # compile time from these features, and the backend is per-platform, so each
@@ -51,6 +60,12 @@ keyring = { version = "3", features = ["apple-native"] }
 # build needs no new downloads.
 core-graphics = { version = "0.25", features = ["highsierra", "elcapitan"] }
 core-foundation = "0.10"
+# System OCR engine: VNRecognizeTextRequest from the Vision framework. Only
+# the classes we call are enabled; the crate's default features would pull in
+# AVFoundation/CoreML/etc. bindings we never touch.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSString", "NSProcessInfo"] }
+objc2-vision = { version = "0.3", default-features = false, features = ["std", "alloc", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNObservation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }

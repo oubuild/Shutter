@@ -1,0 +1,101 @@
+THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+
+This file covers the third-party OCR components Shutter relies on for the
+optional local 提取文字 (text extraction) engines, and the optional model
+assets the user may download. These notices are provided for attribution and
+do not modify their licenses.
+
+===============================================================================
+1. rapidocr-core 0.2.2
+===============================================================================
+
+Project: rapidocr-rs / rapidocr-core
+Source: https://github.com/White-NX/rapidocr-rs
+License: Apache License 2.0
+
+Shutter uses rapidocr-core to run the optional enhanced OCR models (PP-OCRv6
+small and Qota-OCR) locally over ONNX Runtime. macOS devices use the
+operating-system Vision OCR engine by default; cloud extraction uses the
+user-configured OpenAI-compatible vision API. The full Apache License 2.0
+text is distributed at:
+
+  resources/ocr/LICENSE-APACHE-2.0.txt
+
+===============================================================================
+2. Optional PP-OCRv6 small and Qota-OCR model assets
+===============================================================================
+
+Upstream project: PaddleOCR
+Upstream source: https://github.com/PaddlePaddle/PaddleOCR
+Converted model distributor: RapidOCR Authors / RapidAI
+Conversion project: https://github.com/RapidAI/RapidOCR
+License: Apache License 2.0
+
+The model weights originate from PaddleOCR. Copyright in the upstream model
+weights is held by Baidu and/or the respective PaddleOCR rights holders.
+RapidOCR converts and redistributes the model artifacts in ONNX format under
+the same Apache License 2.0 terms and does not claim ownership of the upstream
+model weights.
+
+Qota-OCR:
+
+  Project: Qota-OCR
+  Source: https://huggingface.co/atonlee/Qota-OCR
+  Author: atonlee
+  License: Apache License 2.0
+
+Qota-OCR combines the PP-OCRv6 recognition character set with Korean
+characters and is used as an optional recognition model. Its model card lists
+AI-Hub Korean datasets and PaddleOCR corpora among its training data sources.
+
+Optional downloaded artifacts (not bundled in the installer): see the pinned
+source URLs and SHA-256 checksums in resources/ocr/MODEL-SOURCES.md.
+
+===============================================================================
+3. ort and ort-sys 2.0.0-rc.12
+===============================================================================
+
+Project: ort - Rust bindings for ONNX Runtime
+Source: https://github.com/pykeio/ort
+License: MIT OR Apache License 2.0
+
+This distribution uses these crates under the Apache License 2.0 option. The
+full Apache License 2.0 text is distributed at:
+
+  resources/ocr/LICENSE-APACHE-2.0.txt
+
+===============================================================================
+4. Microsoft ONNX Runtime 1.24.2
+===============================================================================
+
+Project: ONNX Runtime
+Source: https://github.com/microsoft/onnxruntime/tree/v1.24.2
+License: MIT License
+
+MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+ONNX Runtime incorporates third-party components under their own licenses.
+The complete third-party notices from the matching ONNX Runtime v1.24.2
+release are distributed with each release archive at
+https://github.com/microsoft/onnxruntime/releases/tag/v1.24.2
+(docs/ThirdPartyNotices.txt inside the package).

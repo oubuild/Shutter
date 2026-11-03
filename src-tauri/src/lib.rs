@@ -5,6 +5,7 @@ pub mod capture;
 pub mod commands;
 pub mod compose;
 pub mod gallery;
+pub mod ocr;
 pub mod output;
 pub mod overlay;
 pub mod pin;
@@ -215,9 +216,13 @@ pub fn run() {
             commands::frame_path,
             commands::cancel_capture,
             commands::confirm_capture,
-            commands::ai_ask,
-            commands::ai_actions,
-            commands::action_hint,
+                commands::ai_ask,
+                commands::ai_actions,
+                commands::ocr_providers,
+                commands::ocr_set_provider,
+                commands::ocr_download_model,
+                commands::ocr_extract,
+                commands::action_hint,
             commands::get_settings,
             commands::model_presets,
             commands::save_settings_cmd,

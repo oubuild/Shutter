@@ -103,7 +103,37 @@ function installIpcMock() {
     copyAfterCapture: true,
     autoSave: true,
     captureShortcut: "CmdOrControl+Shift+KeyA",
+    ocrProvider: "system",
   };
+
+  /** Which optional models the mock pretends are on disk. */
+  const downloadedModels: Record<string, boolean> = { ppocr: false, qota: false };
+
+  /** Mirrors `ocr::providers_info` so the browser dev UI matches the app. */
+  function ocrProviders(): Record<string, unknown>[] {
+    const current = String(settings.ocrProvider ?? "system");
+    const card = (
+      id: string,
+      title: string,
+      subtitle: string,
+      sizeLabel: string | null,
+      downloaded: boolean,
+    ) => ({
+      id,
+      title,
+      subtitle,
+      sizeLabel,
+      available: true,
+      downloaded,
+      current: current === id,
+    });
+    return [
+      card("cloud", "云端识别", "联网调用 API", null, true),
+      card("system", "系统识别", "跟随系统模型", null, true),
+      card("ppocr", "模型PP-OCRV6识别", "中文、繁体中文、英文、日文及拉丁语系", "30 MB", downloadedModels.ppocr),
+      card("qota", "模型Qota-OCR识别", "韩文、中文、日文和英文混合识别", "36 MB", downloadedModels.qota),
+    ];
+  }
 
   const presets = [
     {
@@ -260,6 +290,7 @@ function installIpcMock() {
     lastCopied: null as string | null,
     openedSettings: 0,
     settings,
+    downloadedModels,
     emit: (event: string, payload: unknown) => emitEvent(event, payload),
     listenerCount: (event: string) => (listeners.get(event) ?? []).length,
   };
@@ -389,6 +420,69 @@ function installIpcMock() {
             // Rust returns immediately; the answer arrives as events.
             if (mock.autoStream) streamCanned(requestId, request.action ?? "ask");
             resolve(null);
+            break;
+          }
+          case "ocr_providers":
+            resolve(ocrProviders());
+            break;
+          case "ocr_set_provider": {
+            const provider = String(args.provider ?? "");
+            const known = ["cloud", "system", "ppocr", "qota"];
+            if (!known.includes(provider)) {
+              // The real backend rejects via a thrown string; the mock just
+              // resolves the command with nothing (tests drive errors via
+              // `__ipcMock`).
+              resolve(null);
+              break;
+            }
+            settings.ocrProvider = provider;
+            resolve(null);
+            break;
+          }
+          case "ocr_download_model": {
+            const provider = String(args.provider ?? "");
+            if (provider !== "ppocr" && provider !== "qota") resolve(null);
+            else {
+              // Resolve only after the fake stream finishes, like the real
+              // multi-second download would.
+              const files =
+                provider === "qota"
+                  ? ["PP-OCRv6_det_small.onnx", "qota_ocr_rec.onnx", "qota_ocr_preprocessor_config.json"]
+                  : ["PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_small.onnx", "ppocrv6_dict.txt"];
+              const total = provider === "qota" ? 37748736 : 31457280;
+              let file = 0;
+              let sent = 0;
+              const tick = () => {
+                if (file >= files.length) {
+                  downloadedModels[provider] = true;
+                  resolve(ocrProviders().find((c) => c.id === provider) ?? null);
+                  return;
+                }
+                emitEvent("ocr://download", {
+                  provider,
+                  filename: files[file],
+                  downloaded: sent,
+                  total,
+                });
+                sent += Math.round(total / files.length / 5);
+                if (sent >= ((file + 1) * total) / files.length) {
+                  sent = Math.round(((file + 1) * total) / files.length);
+                  file += 1;
+                }
+                window.setTimeout(tick, 90);
+              };
+              window.setTimeout(tick, 120);
+            }
+            break;
+          }
+          case "ocr_extract": {
+            const requestId = String(args.requestId ?? "");
+            resolve({
+              requestId,
+              provider: String(settings.ocrProvider ?? "system"),
+              text: canned.extract,
+              elapsedMs: 480,
+            });
             break;
           }
           case "plugin:app|version":

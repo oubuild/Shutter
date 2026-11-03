@@ -362,6 +362,104 @@ pub fn ai_actions() -> Vec<&'static str> {
     vec!["extract", "translate", "explain", "ask", "reply"]
 }
 
+/// The 识别方式 picker cards for the current selection.
+#[tauri::command]
+pub fn ocr_providers() -> Vec<crate::types::OcrProviderInfo> {
+    crate::ocr::providers_info(&settings::load_settings().ocr_provider)
+}
+
+/// Remember the chosen engine. This writes the field directly instead of the
+/// settings-form `save_settings_cmd`, so it cannot re-register the capture
+/// hotkey or clobber unsaved edits in the settings window.
+#[tauri::command]
+pub fn ocr_set_provider(provider: String) -> std::result::Result<(), String> {
+    use crate::ocr::{models, OcrProvider};
+
+    let chosen = OcrProvider::from_id(&provider).map_err(|e| format!("{e:#}"))?;
+    match chosen {
+        OcrProvider::Cloud => {}
+        OcrProvider::System => {
+            #[cfg(not(target_os = "macos"))]
+            return Err("系统识别仅在 macOS 上可用".into());
+        }
+        OcrProvider::Ppocr | OcrProvider::Qota => {
+            if !models::models_supported() {
+                return Err("本地模型仅支持 Apple Silicon 且 macOS 13.4 以上的设备".into());
+            }
+            if !models::is_downloaded(chosen) {
+                return Err("请先下载模型，再切换".into());
+            }
+        }
+    }
+    let mut settings = settings::load_settings();
+    settings.ocr_provider = chosen.id().into();
+    settings::save_settings(&settings).map_err(|e| format!("{e:#}"))
+}
+
+/// Download a provider's model assets with `ocr://download` progress, then
+/// return its refreshed card.
+#[tauri::command]
+pub async fn ocr_download_model(
+    app: AppHandle,
+    provider: String,
+) -> std::result::Result<crate::types::OcrProviderInfo, String> {
+    use crate::ocr::{models, OcrProvider};
+
+    let chosen = OcrProvider::from_id(&provider).map_err(|e| format!("{e:#}"))?;
+    if !chosen.is_local_model() {
+        return Err("云端识别与系统识别无需下载模型".into());
+    }
+    if !models::models_supported() {
+        return Err("本地模型仅支持 Apple Silicon 且 macOS 13.4 以上的设备".into());
+    }
+    let progress_provider = chosen.id().to_string();
+    models::download(chosen, move |filename, downloaded, total| {
+        let _ = app.emit(
+            "ocr://download",
+            crate::types::OcrDownloadProgress {
+                provider: progress_provider.clone(),
+                filename: filename.to_string(),
+                downloaded,
+                total,
+            },
+        );
+    })
+    .await
+    .map_err(|e| format!("{e:#}"))?;
+
+    Ok(crate::ocr::providers_info(&provider)
+        .into_iter()
+        .find(|info| info.id == provider)
+        .expect("providers_info covers every provider"))
+}
+
+/// Run the current local engine (system / ppocr / qota) over an existing
+/// crop. Cloud extraction is the streaming AI pipeline — the frontend routes
+/// it to `ai_ask` — so requesting it here is an error.
+#[tauri::command]
+pub async fn ocr_extract(
+    app: AppHandle,
+    crop_id: String,
+    request_id: String,
+) -> std::result::Result<crate::types::OcrExtractResult, String> {
+    let store: State<'_, Arc<crate::session::Store>> = app.state();
+    let png = store.crop(&crop_id).map_err(|e| format!("{e:#}"))?;
+
+    let provider = crate::ocr::OcrProvider::from_id(&settings::load_settings().ocr_provider)
+        .map_err(|e| format!("{e:#}"))?;
+    let id = provider.id().to_string();
+    let outcome = crate::ocr::extract(provider, png)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+
+    Ok(crate::types::OcrExtractResult {
+        request_id,
+        provider: id,
+        text: outcome.text,
+        elapsed_ms: u64::try_from(outcome.elapsed_ms).unwrap_or(u64::MAX),
+    })
+}
+
 /// Suggested endpoints for the settings window.
 #[tauri::command]
 pub fn model_presets() -> Vec<crate::types::Preset> {

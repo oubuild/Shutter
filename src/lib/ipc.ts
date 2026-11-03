@@ -85,6 +85,47 @@ export type Settings = {
    * always returns the effective value.
    */
   updateSource?: UpdateSource;
+  /**
+   * Which extraction engine 提取文字 uses (cloud | system | ppocr | qota).
+   * Same optionality as `updateSource`: the backend defaults to system.
+   */
+  ocrProvider?: string;
+};
+
+/* ------------------------------------------------------------------ OCR */
+
+/** Serialized `ocr_set_provider` / `ocr_download_model` argument. */
+export type OcrProviderId = "cloud" | "system" | "ppocr" | "qota";
+
+/** One engine card in the 识别方式 picker (Rust ocr.rs is the single source
+ * for titles/subtitles so the UI cannot drift from the backend). */
+export type OcrProviderInfo = {
+  id: OcrProviderId;
+  title: string;
+  subtitle: string;
+  /** Download size on model cards, e.g. "30 MB". */
+  sizeLabel: string | null;
+  /** False where the engine cannot run; the card is hidden entirely. */
+  available: boolean;
+  /** Model assets present locally (always true for cloud/system). */
+  downloaded: boolean;
+  current: boolean;
+};
+
+/** Return of `ocr_extract` — one finished local extraction run. */
+export type OcrExtractResult = {
+  requestId: string;
+  provider: OcrProviderId;
+  text: string;
+  elapsedMs: number;
+};
+
+/** Payload of the `ocr://download` progress event. */
+export type OcrDownloadProgress = {
+  provider: OcrProviderId;
+  filename: string;
+  downloaded: number;
+  total: number | null;
 };
 
 /** Answer of `check_app_update` (Rust updater.rs). */
@@ -187,6 +228,17 @@ export const api = {
     }),
   aiAsk: (request: AiRequest, requestId: string) =>
     invoke<void>("ai_ask", { request, requestId }),
+  /* 提取文字 (OCR) — engine picker, model downloads, local extraction. */
+  ocrProviders: () => invoke<OcrProviderInfo[]>("ocr_providers"),
+  ocrSetProvider: (provider: OcrProviderId) =>
+    invoke<void>("ocr_set_provider", { provider }),
+  /** Stream a model in with `ocr://download` progress; returns the fresh card. */
+  ocrDownloadModel: (provider: OcrProviderId) =>
+    invoke<OcrProviderInfo>("ocr_download_model", { provider }),
+  /** Run the current local engine over an existing crop. Cloud goes through
+   * `aiAsk` (streaming) instead — never this command. */
+  ocrExtract: (cropId: string, requestId: string) =>
+    invoke<OcrExtractResult>("ocr_extract", { cropId, requestId }),
   getSettings: () => invoke<Settings>("get_settings"),
   modelPresets: () => invoke<Preset[]>("model_presets"),
   saveSettings: (settings: Settings) =>
@@ -340,6 +392,9 @@ export const events = {
   /** Fired when a new crop is handed to the chat window. */
   onAiBind: (cb: (d: AiBind) => void): Promise<UnlistenFn> =>
     listen<AiBind>("ai://bind", (e) => cb(e.payload)),
+  /** Model artifact bytes arriving during an `ocr_download_model` run. */
+  onOcrDownload: (cb: (d: OcrDownloadProgress) => void): Promise<UnlistenFn> =>
+    listen<OcrDownloadProgress>("ocr://download", (e) => cb(e.payload)),
   /** Fired when the tray asks the main window to switch section. */
   onUiTab: (cb: (tab: string) => void): Promise<UnlistenFn> =>
     listen<string>("ui://tab", (e) => cb(e.payload)),

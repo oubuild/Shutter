@@ -12,12 +12,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Confirm } from "../components/Confirm";
+import { OcrProviderPicker, type OcrDownloadState } from "../components/OcrProviderPicker";
 import {
   api,
   errorText,
   events,
   type AiAction,
   type AiRequest,
+  type OcrProviderId,
+  type OcrProviderInfo,
   type Settings,
 } from "../lib/ipc";
 
@@ -42,6 +45,9 @@ type ActState = {
   error?: string;
   /** Live request owning this tab; cleared once the stream settles. */
   requestId?: string;
+  /** Local OCR only: engine title and wall time, shown next to the result. */
+  engine?: string;
+  elapsedMs?: number;
 };
 
 const IDLE_ACT: ActState = { status: "idle", text: "" };
@@ -177,6 +183,13 @@ export function Chat() {
   const [editDraft, setEditDraft] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
 
+  /* 提取文字 engine picker: card list from the backend, the live download,
+     and whether the tab currently shows the picker instead of the result. */
+  const [ocrProviders, setOcrProviders] = useState<OcrProviderInfo[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [ocrDownload, setOcrDownload] = useState<OcrDownloadState | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+
   const logRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const modelRef = useRef<HTMLDivElement | null>(null);
@@ -189,6 +202,30 @@ export function Chat() {
     activeId !== null || Object.values(acts).some((a) => a.status === "streaming");
   const canAsk = cropId !== "" && !busy;
   const act = acts[tab as ActionTab] ?? null;
+  const currentProvider = ocrProviders.find((p) => p.current);
+
+  const refreshOcrProviders = useCallback(() => {
+    return api.ocrProviders().then(setOcrProviders).catch(() => undefined);
+  }, []);
+
+  /* Engine cards + model download progress (mirrors `ocr://download`). */
+  useEffect(() => {
+    refreshOcrProviders();
+  }, [refreshOcrProviders]);
+  useEffect(() => {
+    let disposed = false;
+    let off: (() => void) | undefined;
+    events
+      .onOcrDownload((d) => {
+        if (!disposed) setOcrDownload(d);
+      })
+      .then((fn) => (disposed ? fn() : (off = fn)))
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  }, []);
 
   const appendError = useCallback((text: string) => {
     setMessages((prev) => [
@@ -331,6 +368,7 @@ export function Chat() {
         setMessages([]);
         setEditing(false);
         setZoom("fit");
+        setPickerOpen(false);
         api.cropDataUrl(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
         // "ask" has no preset prompt — it lands on the 对话 tab and waits for
         // the user's question; the four actions run immediately.
@@ -415,7 +453,8 @@ export function Chat() {
   function selectTab(next: Tab) {
     setTab(next);
     if (next !== "chat" && acts[next].status === "idle" && cropId !== "" && !busy) {
-      start(next);
+      if (next === "extract") runExtract();
+      else start(next);
     }
   }
 
@@ -477,8 +516,91 @@ export function Chat() {
   }
 
   useEffect(() => {
-    startRef.current = start;
+    // 提取文字 routes by engine; every other action goes straight to the AI.
+    startRef.current = (action, cropOverride) => {
+      if (action === "extract") runExtract(cropOverride);
+      else start(action, cropOverride);
+    };
   });
+
+  /** Engine-aware 提取文字: cloud streams through the AI pipeline, the system
+      and local engines run through `ocr_extract` and land as one result. */
+  function runExtract(cropOverride?: string) {
+    if (currentProvider !== undefined && currentProvider.id !== "cloud") {
+      runOcrExtract(cropOverride);
+    } else {
+      start("extract", cropOverride);
+    }
+  }
+
+  function runOcrExtract(cropOverride?: string) {
+    const targetCrop = cropOverride ?? cropId;
+    if (!targetCrop || busy) return;
+    const requestId = crypto.randomUUID();
+    setPickerOpen(false);
+    setToast(null);
+    setActs((prev) => ({
+      ...prev,
+      extract: { status: "streaming", text: "", requestId },
+    }));
+    api
+      .ocrExtract(targetCrop, requestId)
+      .then((result) => {
+        setActs((prev) =>
+          prev.extract.requestId === requestId
+            ? {
+                ...prev,
+                extract: {
+                  status: "done",
+                  text: result.text,
+                  engine: currentProvider?.title,
+                  elapsedMs: result.elapsedMs,
+                },
+              }
+            : prev,
+        );
+      })
+      .catch((e: unknown) => {
+        setActs((prev) =>
+          prev.extract.requestId === requestId
+            ? {
+                ...prev,
+                extract: { status: "error", text: "", error: errorText(e) },
+              }
+            : prev,
+        );
+      });
+  }
+
+  /** Remember the chosen engine and re-extract with it, so what the result
+      shows always matches what the picker claims. */
+  function switchProvider(id: OcrProviderId) {
+    setOcrError(null);
+    api
+      .ocrSetProvider(id)
+      .then(refreshOcrProviders)
+      .then(() => {
+        setPickerOpen(false);
+        if (cropId !== "") runExtract();
+      })
+      .catch((e: unknown) => setOcrError(errorText(e)));
+  }
+
+  function downloadProvider(id: OcrProviderId) {
+    if (ocrDownload !== null) return;
+    setOcrError(null);
+    setOcrDownload({ provider: id, filename: "", downloaded: 0, total: null });
+    api
+      .ocrDownloadModel(id)
+      .then((card) => {
+        setOcrProviders((prev) => prev.map((p) => (p.id === id ? card : p)));
+        setOcrDownload(null);
+      })
+      .catch((e: unknown) => {
+        setOcrError(errorText(e));
+        setOcrDownload(null);
+      });
+  }
 
   function copy(text: string) {
     api.copyText(text).catch((e: unknown) => appendError(errorText(e)));
@@ -795,11 +917,29 @@ export function Chat() {
             <section className="ai-card min-[900px]:flex-1">
               <header className="ai-card-head">
                 <span className="ai-card-title">{TAB_LABEL[tab]}</span>
+                {tab === "extract" && !pickerOpen && (
+                  <button
+                    className="ml-1 flex-none rounded-full border border-primary-500/30 bg-primary-500/8 px-2.5 py-0.5 text-mini color-primary-600 transition hover:bg-primary-500/14"
+                    title="切换识别方式"
+                    onClick={() => setPickerOpen(true)}
+                  >
+                    {currentProvider ? currentProvider.title : "识别方式"} ›
+                  </button>
+                )}
                 {tab !== "chat" && act?.status === "streaming" && (
-                  <span className="text-mini color-ink-dim">生成中…</span>
+                  <span className="text-mini color-ink-dim">
+                    {tab === "extract" && currentProvider !== undefined && currentProvider.id !== "cloud"
+                      ? "识别中…"
+                      : "生成中…"}
+                  </span>
+                )}
+                {tab === "extract" && act?.status === "done" && act.elapsedMs !== undefined && (
+                  <span className="text-mini tabular-nums color-ink-dim">
+                    {act.engine} · {act.elapsedMs}ms
+                  </span>
                 )}
                 <span className="flex-1" />
-                {tab !== "chat" && act && (
+                {tab !== "chat" && !pickerOpen && act && (
                   <>
                     {actDone && (
                       <button
@@ -825,7 +965,7 @@ export function Chat() {
                       className="ai-iconbtn h-7 w-7"
                       title={tab === "extract" ? "重新识别" : `重新${TAB_LABEL[tab]}`}
                       disabled={busy || editing}
-                      onClick={() => start(tab)}
+                      onClick={() => (tab === "extract" ? runExtract() : start(tab))}
                     >
                       <RerunIcon />
                     </button>
@@ -833,7 +973,16 @@ export function Chat() {
                 )}
               </header>
 
-              {tab === "chat" ? (
+              {tab === "extract" && pickerOpen ? (
+                <OcrProviderPicker
+                  providers={ocrProviders}
+                  download={ocrDownload}
+                  downloadError={ocrError}
+                  onSwitch={switchProvider}
+                  onDownload={downloadProvider}
+                  onBack={() => setPickerOpen(false)}
+                />
+              ) : tab === "chat" ? (
                 <div className="min-h-[140px] flex-1 px-3.5 py-3">
                   {messages.length === 0 ? (
                     <div className="flex h-full min-h-[120px] flex-col items-center justify-center gap-1.5 text-center">
@@ -903,7 +1052,7 @@ export function Chat() {
                       <button
                         className="ai-btn-primary mt-1.5"
                         disabled={busy}
-                        onClick={() => start(tab)}
+                        onClick={() => (tab === "extract" ? runExtract() : start(tab))}
                       >
                         {TAB_LABEL[tab]}
                       </button>
@@ -958,7 +1107,7 @@ export function Chat() {
                         <button
                           className="ai-btn h-8"
                           disabled={busy}
-                          onClick={() => start(tab)}
+                          onClick={() => (tab === "extract" ? runExtract() : start(tab))}
                         >
                           重试
                         </button>
