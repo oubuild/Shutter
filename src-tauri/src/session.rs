@@ -5,7 +5,7 @@
 //! supersedes the previous one, and crop handles are dropped once the AI layer
 //! has consumed them.
 
-use crate::types::MonitorInfo;
+use crate::types::{MonitorInfo, WindowInfo};
 use anyhow::{anyhow, Result};
 use image::RgbaImage;
 use std::collections::HashMap;
@@ -23,6 +23,10 @@ pub struct Session {
     pub monitors: Vec<MonitorInfo>,
     /// Physical-resolution frame per monitor id.
     frames: HashMap<u32, RgbaImage>,
+    /// On-screen windows at capture time, front-to-back. Cached with the
+    /// frames so the overlay's hover-to-select matches the frozen desktop
+    /// exactly — including menus that close the moment the overlay appears.
+    windows: Vec<WindowInfo>,
 }
 
 impl Session {
@@ -32,6 +36,10 @@ impl Session {
 
     pub fn monitor(&self, monitor_id: u32) -> Option<&MonitorInfo> {
         self.monitors.iter().find(|m| m.id == monitor_id)
+    }
+
+    pub fn windows(&self) -> &[WindowInfo] {
+        &self.windows
     }
 }
 
@@ -59,11 +67,18 @@ impl Store {
     ///
     /// The caller does the capturing, so no `xcap::Monitor` ever crosses into
     /// this struct (see the `Session` doc comment for why that matters).
-    pub fn begin(&self, monitors: Vec<MonitorInfo>, frames: Vec<(u32, RgbaImage)>) -> Arc<Session> {
+    /// `windows` is the on-screen window list gathered alongside the frames.
+    pub fn begin(
+        &self,
+        monitors: Vec<MonitorInfo>,
+        frames: Vec<(u32, RgbaImage)>,
+        windows: Vec<WindowInfo>,
+    ) -> Arc<Session> {
         let session = Arc::new(Session {
             id: uuid::Uuid::new_v4().to_string(),
             monitors,
             frames: frames.into_iter().collect(),
+            windows,
         });
         *self.current.lock().unwrap() = Some(Arc::clone(&session));
         // A new capture invalidates prior crops by construction.

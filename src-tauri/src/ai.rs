@@ -52,9 +52,52 @@ pub fn prompt_for(action: AiAction, lang: Option<&str>, question: Option<&str>) 
     (system.to_string(), user)
 }
 
+/// Longest edge a vision request keeps; larger crops are downscaled first.
+///
+/// A full-resolution 4K/5K screenshot is a multi-megabyte PNG, and the base64
+/// upload dominates the time-to-first-token. Vision models tile images around
+/// ~2k anyway, so capping here trades nothing visible for a 10-30x smaller
+/// payload.
+const VISION_MAX_SIDE: u32 = 2048;
+
+/// Build the image part of a request: decode the crop PNG, downscale when it
+/// exceeds [`VISION_MAX_SIDE`], and re-encode as JPEG.
+///
+/// JPEG q88 keeps UI text legible for extraction/translation while avoiding
+/// PNG's cost on photographic content. Anything that fails to decode (e.g. a
+/// test's fake payload) falls back to passing the original bytes as a PNG
+/// data URL, so the transport never rejects a request the caller could make
+/// before.
+pub fn vision_data_url(png: &[u8]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let jpeg: anyhow::Result<Vec<u8>> = (|| {
+        use image::ImageEncoder;
+        let img = image::load_from_memory(png).map_err(|e| anyhow!("decode image: {e}"))?;
+        let scaled = crate::output::thumbnail(&img.to_rgba8(), VISION_MAX_SIDE);
+        // JPEG has no alpha channel; drop it before encoding.
+        let rgb = image::DynamicImage::ImageRgba8(scaled).to_rgb8();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 88)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| anyhow!("encode jpeg: {e}"))?;
+        Ok(buf.into_inner())
+    })();
+    match jpeg {
+        Ok(bytes) => format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes)),
+        // Undecodable input or a JPEG encoder refusal: hand the bytes through
+        // untouched rather than failing the whole request.
+        _ => crate::output::data_url(png),
+    }
+}
+
 /// Build the OpenAI-compatible request body.
-pub fn request_body(model: &str, system: &str, user: &str, png: &[u8]) -> Value {
-    let data_url = crate::output::data_url(png);
+pub fn request_body(model: &str, system: &str, user: &str, image_url: &str) -> Value {
     json!({
         "model": model,
         "stream": true,
@@ -65,7 +108,7 @@ pub fn request_body(model: &str, system: &str, user: &str, png: &[u8]) -> Value 
                 "role": "user",
                 "content": [
                     { "type": "text", "text": user },
-                    { "type": "image_url", "image_url": { "url": data_url, "detail": "original" } }
+                    { "type": "image_url", "image_url": { "url": image_url, "detail": "original" } }
                 ]
             }
         ]
@@ -258,7 +301,13 @@ impl AiClient {
         F: FnMut(String),
     {
         let (system, user) = prompt_for(action, lang, question);
-        let body = request_body(model, &system, &user, png);
+        let image_url = vision_data_url(png);
+        log::info!(
+            "ai request: {} bytes png -> {} byte image payload",
+            png.len(),
+            image_url.rsplit_once("base64,").map_or(0, |(_, b64)| b64.len() * 3 / 4)
+        );
+        let body = request_body(model, &system, &user, &image_url);
 
         let response = self
             .http
@@ -553,12 +602,19 @@ impl ProbeClient {
     }
 }
 
+/// The streaming client, built once and shared so consecutive requests reuse
+/// its connection pools instead of paying TLS setup every time.
+fn shared_client() -> Result<&'static AiClient> {
+    static CLIENT: std::sync::OnceLock<Option<AiClient>> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| AiClient::new().ok()).as_ref().ok_or_else(|| anyhow!("build http client"))
+}
+
 /// Run a request and always finish with `ai://done`.
 pub async fn run(app: AppHandle, request_id: String, png: Vec<u8>, task: AiTask) {
     let result = async {
         let settings = crate::settings::load_settings();
         let key = crate::settings::load_api_key()?;
-        let client = AiClient::new()?;
+        let client = shared_client()?;
         client
             .stream(
                 &app,
@@ -594,6 +650,7 @@ pub struct AiTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     #[test]
     fn endpoint_accepts_bare_host() {
@@ -658,16 +715,65 @@ mod tests {
 
     #[test]
     fn body_carries_base64_image_and_model() {
-        let body = request_body("deepseek-flash", "sys", "usr", b"\x89PNG");
+        let body = request_body(
+            "deepseek-flash",
+            "sys",
+            "usr",
+            "data:image/jpeg;base64,Zm9v",
+        );
         assert_eq!(body["model"], "deepseek-flash");
         assert_eq!(body["stream"], true);
         let parts = &body["messages"][1]["content"];
         assert_eq!(parts[0]["type"], "text");
         assert_eq!(parts[1]["type"], "image_url");
-        assert!(parts[1]["image_url"]["url"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:image/png;base64,"));
+        assert_eq!(
+            parts[1]["image_url"]["url"].as_str().unwrap(),
+            "data:image/jpeg;base64,Zm9v"
+        );
+    }
+
+    #[test]
+    fn vision_payload_reencodes_large_png_as_jpeg() {
+        // A 3000px image must come back as a JPEG capped at 2048 on the long
+        // edge — the whole point is a payload an order of magnitude smaller.
+        let img = image::RgbaImage::from_pixel(3000, 1000, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let url = vision_data_url(&png);
+        assert!(url.starts_with("data:image/jpeg;base64,"), "got: {}…", &url[..40]);
+        let b64 = url.split_once("base64,").unwrap().1;
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let bytes = STANDARD.decode(b64).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.dimensions(), (2048, 683));
+    }
+
+    #[test]
+    fn vision_payload_small_image_is_not_upscaled() {
+        let img = image::RgbaImage::from_pixel(300, 100, image::Rgba([1, 2, 3, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let url = vision_data_url(&png);
+        assert!(url.starts_with("data:image/jpeg;base64,"), "got: {url:?}");
+        let b64 = url.split_once("base64,").unwrap().1;
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let decoded = image::load_from_memory(&STANDARD.decode(b64).unwrap()).unwrap();
+        assert_eq!(decoded.dimensions(), (300, 100));
+    }
+
+    #[test]
+    fn vision_payload_falls_back_to_png_on_garbage() {
+        let url = vision_data_url(b"x");
+        assert_eq!(
+            url,
+            crate::output::data_url(b"x"),
+            "undecodable bytes must pass through untouched"
+        );
     }
 
     #[test]

@@ -290,6 +290,9 @@ export const api = {
     invoke<string | null>("frame_path", { monitorId, sessionId }),
   saveCrop: (cropId: string) => invoke<string>("save_crop", { cropId }),
   cropDataUrl: (cropId: string) => invoke<string>("crop_data_url", { cropId }),
+  /** Scaled-down data URL for previews (the AI window); pins need the full
+   *  `cropDataUrl` because they render 1:1. */
+  cropPreview: (cropId: string) => invoke<string>("crop_preview", { cropId }),
   pinCrop: (cropId: string) => invoke<void>("pin_crop", { cropId }),
   closePin: (pinId: string) => invoke<void>("close_pin", { pinId }),
   /* Long screenshot (scroll stitching) — reference command surface. */

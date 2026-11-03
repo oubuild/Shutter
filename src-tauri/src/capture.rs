@@ -86,14 +86,23 @@ pub fn capture_all() -> Result<(Vec<MonitorInfo>, Vec<(u32, RgbaImage)>)> {
     Ok((monitors, frames))
 }
 
-/// On-screen standard-layer windows, front-to-back, for hover-to-select.
-///
-/// Only normal app windows (`kCGWindowLayer == 0`) of other processes are
-/// listed; menus, the Dock and the overlay's own windows stay out. Window
-/// titles need Screen Recording permission, which capture already requires —
-/// without it the `title` field is simply empty and the chip shows the owner.
+/// One entry of the window server's on-screen list, before any filtering.
 #[cfg(target_os = "macos")]
-pub fn list_windows() -> Result<Vec<WindowInfo>> {
+pub(crate) struct RawWindow {
+    pub(crate) layer: i32,
+    pub(crate) owner: String,
+    pub(crate) title: String,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+/// The raw CGWindowListCopyWindowInfo dump: every on-screen window except
+/// desktop elements, in the window server's front-to-back order (higher
+/// layers first, front-to-back within a layer — the visual stacking order).
+#[cfg(target_os = "macos")]
+pub(crate) fn raw_windows() -> Vec<RawWindow> {
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
@@ -112,7 +121,6 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
     type Dict = CFDictionary<CFString, CFType>;
 
     let mut out = Vec::new();
-    let pid = std::process::id() as i32;
 
     // The result is owned (Copy), so wrap_under_create_rule is correct.
     let array = unsafe {
@@ -121,7 +129,7 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
             0, // kCGNullWindowID
         );
         if ptr.is_null() {
-            return Ok(out);
+            return out;
         }
         CFArray::<Dict>::wrap_under_create_rule(ptr.cast())
     };
@@ -138,15 +146,6 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                 .map(|s| s.to_string())
                 .unwrap_or_default()
         };
-
-        // Layer 0 = normal windows; menus (24), Dock (20), overlays (101+) out.
-        if number(window, "kCGWindowLayer").and_then(|n| n.to_i32()) != Some(0) {
-            continue;
-        }
-        // Skip our own overlay/frame windows.
-        if number(window, "kCGWindowOwnerPID").and_then(|n| n.to_i32()) == Some(pid) {
-            continue;
-        }
 
         // The bounds sub-dictionary is only known to the runtime as a CFType;
         // borrow it as the dictionary it is (get-rule: no extra retain, the
@@ -168,21 +167,89 @@ pub fn list_windows() -> Result<Vec<WindowInfo>> {
                 .and_then(|n| n.to_f64())
                 .unwrap_or(0.0)
         };
-        let (x, y) = (coord("X"), coord("Y"));
-        let (w, h) = (coord("Width"), coord("Height"));
-        // Cursor-sized tray leftovers and 1px helpers are noise for selection.
-        if w < 50.0 || h < 50.0 {
-            continue;
-        }
 
-        out.push(WindowInfo {
-            id: out.len() as u64,
-            x,
-            y,
-            width: w,
-            height: h,
+        out.push(RawWindow {
+            layer: number(window, "kCGWindowLayer").and_then(|n| n.to_i32()).unwrap_or(0),
             owner: string(window, "kCGWindowOwnerName"),
             title: string(window, "kCGWindowName"),
+            x: coord("X"),
+            y: coord("Y"),
+            width: coord("Width"),
+            height: coord("Height"),
+        });
+    }
+    out
+}
+
+/// On-screen windows, front-to-back, for hover-to-select.
+///
+/// Called at capture time — before the overlay windows exist — and cached in
+/// the session, so the list matches the frozen frame exactly: a context menu
+/// that macOS dismisses when the overlay takes focus stays selectable, and
+/// Shutter's own main/AI/pin windows are listed like any other window.
+///
+/// Layers 0..=101 are kept: normal windows (0), floating panels (3), the Dock
+/// (20), the menu bar (24) and popup menus (101) are all things the user can
+/// see and may want as "the topmost thing under my cursor". Higher layers
+/// (screen-saver shields and friends) are not capture targets. The window
+/// server orders the list top-to-bottom across layers, so the first hit at a
+/// point is the visually topmost window. Titles need Screen Recording
+/// permission, which capture already requires — without it the `title` field
+/// is simply empty and the chip shows the owner.
+/// A window above the normal layer that (nearly) covers a whole monitor is a
+/// gesture shield: visually transparent click zones like the Dock's full-screen
+/// swipe area, which every Mac has. Left in the selection list it contains
+/// every point on screen and wins every hover hit-test before a real window is
+/// reached — nothing but the whole screen could ever be preselected. A layer-0
+/// window of the same size is a genuine fullscreen app and stays selectable,
+/// and a high-layer window smaller than the monitor (menus, popovers, the Dock
+/// strip) is visible content worth selecting.
+#[cfg(target_os = "macos")]
+fn is_gesture_shield(
+    layer: i32,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    monitors: &[(f64, f64, f64, f64)],
+) -> bool {
+    layer > 0
+        && monitors.iter().any(|&(mx, my, mw, mh)| {
+            x <= mx + mw * 0.05
+                && y <= my + mh * 0.05
+                && w >= mw * 0.95
+                && h >= mh * 0.95
+        })
+}
+
+#[cfg(target_os = "macos")]
+pub fn list_windows() -> Result<Vec<WindowInfo>> {
+    // kCGPopUpMenuWindowLevel: keep popup menus, drop screen-saver shields.
+    const MAX_LAYER: i32 = 101;
+    let monitors: Vec<(f64, f64, f64, f64)> = displays()?
+        .into_iter()
+        .map(|d| (d.info.x as f64, d.info.y as f64, d.info.width as f64, d.info.height as f64))
+        .collect();
+    let mut out = Vec::new();
+    for raw in raw_windows() {
+        if !(0..=MAX_LAYER).contains(&raw.layer) {
+            continue;
+        }
+        // Cursor-sized tray leftovers and 1px helpers are noise for selection.
+        if raw.width < 50.0 || raw.height < 50.0 {
+            continue;
+        }
+        if is_gesture_shield(raw.layer, raw.x, raw.y, raw.width, raw.height, &monitors) {
+            continue;
+        }
+        out.push(WindowInfo {
+            id: out.len() as u64,
+            x: raw.x,
+            y: raw.y,
+            width: raw.width,
+            height: raw.height,
+            owner: raw.owner,
+            title: raw.title,
         });
         if out.len() >= 200 {
             break;
@@ -223,5 +290,68 @@ mod tests {
             assert_eq!(frame.width(), d.info.pixel_width);
             assert_eq!(frame.height(), d.info.pixel_height);
         }
+    }
+
+    /// Dump the window server's on-screen list next to what `list_windows`
+    /// keeps, so "why is window X not preselected" can be answered from the
+    /// terminal. Run with:
+    ///   cargo test --lib capture::tests::dump_windows -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dump_windows() {
+        #[cfg(target_os = "macos")]
+        for w in raw_windows() {
+            let shield = is_gesture_shield(
+                w.layer,
+                w.x,
+                w.y,
+                w.width,
+                w.height,
+                &[(0.0, 0.0, 1440.0, 900.0)],
+            );
+            let kept = (0..=101).contains(&w.layer)
+                && w.width >= 50.0
+                && w.height >= 50.0
+                && !shield;
+            println!(
+                "{:>3} layer {:>4} ({:>5.0},{:>5.0}) {:>5.0}x{:<5.0} {:<24.24} {}",
+                if kept { "in" } else { "OUT" },
+                w.layer,
+                w.x,
+                w.y,
+                w.width,
+                w.height,
+                w.owner,
+                w.title
+            );
+        }
+    }
+
+    /// The Dock's full-screen swipe zone (layer 20, whole monitor) must not be
+    /// selectable: it contains every point on screen and would win every
+    /// hover hit-test before a real window is reached.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn fullscreen_dock_shield_is_not_selectable() {
+        let monitors = [(0.0, 0.0, 1440.0, 900.0)];
+        // The exact window the Dock exposes on a 1440x900 display.
+        assert!(is_gesture_shield(20, 0.0, 0.0, 1440.0, 900.0, &monitors));
+        // A fullscreen app at the normal layer stays selectable.
+        assert!(!is_gesture_shield(0, 0.0, 0.0, 1440.0, 900.0, &monitors));
+        // The Dock strip and menus are smaller than the monitor: selectable.
+        assert!(!is_gesture_shield(20, 0.0, 820.0, 1440.0, 80.0, &monitors));
+        assert!(!is_gesture_shield(101, 503.0, 180.0, 434.0, 172.0, &monitors));
+        // A high-layer window merely overlapping the monitor origin, but
+        // offset like a real panel, is not a shield.
+        assert!(!is_gesture_shield(3, 120.0, 90.0, 1200.0, 800.0, &monitors));
+        // Multi-monitor: matching any one monitor's full size is enough.
+        assert!(is_gesture_shield(
+            20,
+            1440.0,
+            0.0,
+            1920.0,
+            1080.0,
+            &[(0.0, 0.0, 1440.0, 900.0), (1440.0, 0.0, 1920.0, 1080.0)]
+        ));
     }
 }

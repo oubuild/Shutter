@@ -247,6 +247,7 @@ pub fn run() {
             commands::close_pin,
             commands::save_crop,
             commands::crop_data_url,
+            commands::crop_preview,
                 commands::pin_crop,
                 commands::open_scroll_screenshot_event,
                 commands::scroll_screenshot_panel_loaded_event,

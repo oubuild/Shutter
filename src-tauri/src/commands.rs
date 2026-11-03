@@ -45,15 +45,23 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
     log::info!("capture: teardown {:?}", started.elapsed());
 
-    // Enumerate and capture in one synchronous step. `capture_all` returns
-    // plain data only, so nothing `!Send` (an `xcap::Monitor` wraps a raw
-    // `HMONITOR` on Windows) reaches the managed store; see `session::Session`.
+    // Enumerate windows and capture in one synchronous step. `capture_all`
+    // returns plain data only, so nothing `!Send` (an `xcap::Monitor` wraps a
+    // raw `HMONITOR` on Windows) reaches the managed store; see
+    // `session::Session`. The window list is gathered before the frames are
+    // grabbed: this is the instant the user pressed the hotkey, so menus and
+    // popovers that macOS will dismiss when the overlay takes focus are still
+    // on screen — both in the frame and in the list.
     let grabbed = std::time::Instant::now();
     // Screen capture and PNG encoding are blocking calls; keep them off the
     // async runtime so IPC and window events stay responsive meanwhile.
-    let (monitors, frames) = tokio::task::spawn_blocking(crate::capture::capture_all)
-        .await
-        .map_err(|e| anyhow::anyhow!("capture task failed: {e}"))??;
+    let (monitors, frames, windows) = tokio::task::spawn_blocking(|| -> anyhow::Result<_> {
+        let windows = crate::capture::list_windows().unwrap_or_default();
+        let (monitors, frames) = crate::capture::capture_all()?;
+        Ok((monitors, frames, windows))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("capture task failed: {e}"))??;
     log::info!("capture: grab {:?}", grabbed.elapsed());
     if monitors.is_empty() {
         anyhow::bail!("没有检测到可用的显示器");
@@ -61,7 +69,17 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
 
     // Capture first, then build the windows: the frames stay clean and the
     // overlay never races the capture.
-    let session = store.begin(monitors.clone(), frames);
+    let session = store.begin(monitors.clone(), frames, windows);
+    log::info!(
+        "capture: {} selectable window(s): {}",
+        session.windows().len(),
+        session
+            .windows()
+            .iter()
+            .map(|w| format!("{} {}x{}", w.owner, w.width, w.height))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
     let encoded = std::time::Instant::now();
     let frame_dir = settings::app_dir()?.join("frames");
@@ -114,13 +132,19 @@ pub fn current_session(app: AppHandle) -> Option<CaptureSession> {
     })
 }
 
-/// On-screen windows for the overlay's hover-to-select (macOS; empty
-/// elsewhere). Called once per overlay mount — the window server answers in
-/// low single-digit milliseconds and the list does not need to stay fresh for
-/// the lifetime of a capture.
+/// On-screen windows for the overlay's hover-to-select.
+///
+/// Serves the list cached at capture time (see [`start_capture`]): the overlay
+/// must not re-query the window server, because by the time it mounts the
+/// overlay itself holds focus and every menu, popover and Shutter window that
+/// closed on activation would be missing. Empty when no session is active.
 #[tauri::command]
-pub fn list_windows() -> std::result::Result<Vec<crate::types::WindowInfo>, String> {
-    crate::capture::list_windows().map_err(|e| format!("{e:#}"))
+pub fn list_windows(app: AppHandle) -> Vec<crate::types::WindowInfo> {
+    let store: State<Arc<crate::session::Store>> = app.state();
+    store
+        .current()
+        .map(|s| s.windows().to_vec())
+        .unwrap_or_default()
 }
 
 /// Debug-only: open one of the auxiliary windows by view name.
@@ -727,6 +751,24 @@ pub fn crop_data_url(crop_id: String, app: AppHandle) -> std::result::Result<Str
     let store: State<'_, Arc<crate::session::Store>> = app.state();
     let png = store.crop(&crop_id).map_err(|e| format!("{e:#}"))?;
     Ok(output::data_url(&png))
+}
+
+/// A scaled-down PNG data URL of the crop, for previews (the AI window).
+///
+/// The full-resolution crop can be a multi-megabyte data URL over IPC and a
+/// heavy decode in the webview; a 900px preview — the same size
+/// `CaptureResult.preview_data_url` uses — shows identically at "fit" zoom.
+/// Pins must keep [`crop_data_url`]: they render 1:1.
+#[tauri::command]
+pub fn crop_preview(crop_id: String, app: AppHandle) -> std::result::Result<String, String> {
+    let store: State<Arc<crate::session::Store>> = app.state();
+    let png = store.crop(&crop_id).map_err(|e| format!("{e:#}"))?;
+    let decoded = image::load_from_memory(&png)
+        .map_err(|e| format!("decode crop: {e}"))?
+        .to_rgba8();
+    let preview = output::thumbnail(&decoded, 900);
+    let bytes = output::encode_png_fast(&preview).map_err(|e| format!("{e:#}"))?;
+    Ok(output::data_url(&bytes))
 }
 
 /// Open a pin window for an already-captured crop. Shared by the `pin_crop`

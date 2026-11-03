@@ -277,7 +277,7 @@ export function Chat() {
         refreshModels(s);
       })
       .catch(fail);
-    if (cropId) api.cropDataUrl(cropId).then((url) => { if (!cancelled) setPreview(url); }).catch(fail);
+    if (cropId) api.cropPreview(cropId).then((url) => { if (!cancelled) setPreview(url); }).catch(fail);
     return () => {
       cancelled = true;
     };
@@ -369,7 +369,7 @@ export function Chat() {
         setEditing(false);
         setZoom("fit");
         setPickerOpen(false);
-        api.cropDataUrl(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
+        api.cropPreview(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
         // "ask" has no preset prompt — it lands on the 对话 tab and waits for
         // the user's question; the four actions run immediately.
         if (action === "ask") {

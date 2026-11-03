@@ -113,6 +113,15 @@ export function Main({ initialTab }: { initialTab: Tab }) {
             <div className="ml-3.5 min-w-0 truncate text-compact font-600 tracking-wide color-muted" data-tauri-drag-region>
               Shutter
             </div>
+            {/* The tab breadcrumb keeps the title from sitting alone: the
+                header otherwise reads as an unfinished strip until the eye
+                drops to the nav. All of it stays a drag region. */}
+            <span className="color-faint" data-tauri-drag-region>
+              /
+            </span>
+            <div className="min-w-0 truncate text-compact color-faint" data-tauri-drag-region>
+              {TABS.find((t) => t.id === tab)?.label}
+            </div>
           </header>
         )}
 

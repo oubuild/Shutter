@@ -197,7 +197,6 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let accel = format_accelerator(&crate::settings::load_settings().capture_shortcut);
     let capture = MenuItem::with_id(app, "capture", format!("截图  {accel}"), true, None::<&str>)?;
     let gallery = MenuItem::with_id(app, "gallery", "打开 Shutter", true, None::<&str>)?;
-    let chat = MenuItem::with_id(app, "chat", "AI 助手", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let shortcuts = MenuItem::with_id(app, "shortcuts", "快捷键…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Shutter", true, None::<&str>)?;
@@ -205,7 +204,6 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         &[
             &capture,
-            &chat,
             &PredefinedMenuItem::separator(app)?,
             &gallery,
             &settings,
@@ -369,9 +367,6 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
                         log::error!("capture from tray failed: {e:#}");
                     }
                 });
-            }
-            "chat" => {
-                let _ = open_chat(app, None, None);
             }
             "gallery" => {
                 let _ = open_main(app, "gallery");

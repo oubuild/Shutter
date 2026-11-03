@@ -395,6 +395,7 @@ function installIpcMock() {
             resolve("/Users/ryanuo/Pictures/Shutter/Shutter mock-crop.png");
             break;
           case "crop_data_url":
+          case "crop_preview":
             resolve(cropUrl);
             break;
           case "capture_screens":
