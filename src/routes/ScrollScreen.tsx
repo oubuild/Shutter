@@ -579,7 +579,13 @@ export function ScrollScreen() {
         }),
         events.onShowScrollTip((on) => setIsStart(on)),
         events.onScrollScreenshotError((e) => {
-          setErrorTip(e?.message || "拼接失败，请回到拼接点缓慢滚动页面");
+          const message = e?.message || "拼接失败，请回到拼接点缓慢滚动页面";
+          setErrorTip(message);
+          if (message.includes("无辅助功能权限")) {
+            // Manual mode is click-through and Esc is the only obvious exit;
+            // bring keyboard focus back to this webview after a page click.
+            void win.setFocus().catch(() => {});
+          }
           window.setTimeout(() => setErrorTip(null), 3000);
         }),
         events.onScrollImageUpdate(async (e) => {
@@ -615,14 +621,17 @@ export function ScrollScreen() {
     void win.setIgnoreCursorEvents(isRecording).catch(() => {});
   }, [isRecording]);
 
-  /* Escape quits when not recording (reference keydown). */
+  /* Escape quits in every phase. The panel can be click-through while
+   * recording, so this is a no-op when another app owns keyboard focus. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isRecording) quit();
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      quit();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isRecording, quit]);
+  }, [quit]);
 
   /* Selection settled → notify Rust once (reference `ze` effect). */
   useEffect(() => {

@@ -12,7 +12,7 @@
  * to a spinner plus close.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { api, events, type ScrollSaveAction } from "../lib/ipc";
@@ -108,11 +108,21 @@ export function ScrollRenderBar() {
   }, []);
 
   /** Close the bar (reference `v`). */
-  const close = () => {
+  const close = useCallback(() => {
     setProcessing(false);
     void api.hideScrollScreenshotPanel().catch(() => {});
     void api.closePanel(win.label).catch(() => {});
-  };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [close]);
 
   /** Finish: pause the scroller, then dispose of the stitched image. */
   const finish = async (
