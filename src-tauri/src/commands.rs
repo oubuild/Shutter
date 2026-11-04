@@ -632,6 +632,20 @@ pub fn exit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// The boot-time crop→action binding for a freshly opened chat window, which
+/// may have missed the `ai://bind` events while its webview was still
+/// loading. Takes (clears) the slot — later captures reach the live window
+/// through the event.
+#[tauri::command]
+pub fn chat_pending_bind(app: AppHandle) -> Option<serde_json::Value> {
+    let state = app.try_state::<crate::ChatBind>()?;
+    let mut slot = state.0.lock().ok()?;
+    slot.take()
+        .map(|(crop_id, action)| serde_json::json!({ "cropId": crop_id, "action": action }))
+}
+
+
+
 /// Open the main window on the requested tab (`gallery` / `ai` / `general` /
 /// `shortcuts` / `about`).
 #[tauri::command]

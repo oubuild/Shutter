@@ -80,6 +80,14 @@ fn preflight_permissions() {
     }
 }
 
+/** The crop→action binding the chat window should boot with. `open_chat`
+ *  emits `ai://bind` immediately and once more after 700ms, but a webview
+ *  that is still loading (dev especially) misses both; the window therefore
+ *  pulls this on mount. Cleared on read — later captures reach an
+ *  already-live window through the event. */
+#[derive(Default)]
+pub struct ChatBind(std::sync::Mutex<Option<(String, Option<String>)>>);
+
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -118,6 +126,7 @@ pub fn run() {
         )
         .manage(Arc::new(session::Store::new()))
         .manage(CaptureHotkey(Mutex::new(None)))
+        .manage(ChatBind::default())
         .setup(|app| {
             // Menu-bar agent: no Dock icon, no app menu.
             //
@@ -293,6 +302,7 @@ pub fn run() {
             commands::copy_text_to_clipboard,
             commands::open_settings_window,
             commands::open_about_window,
+            commands::chat_pending_bind,
             commands::autostart_status,
             commands::set_autostart,
             commands::exit_app,

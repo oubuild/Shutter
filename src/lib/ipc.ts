@@ -281,6 +281,9 @@ export const api = {
     invoke<void>("set_autostart", { enabled }),
   /** Quit the app (popover menu 退出, same as the tray's). */
   exitApp: () => invoke<void>("exit_app"),
+  /** Boot-time crop→action binding a freshly opened chat window may have
+   *  missed as an event while its webview was still loading. */
+  chatPendingBind: () => invoke<AiBind | null>("chat_pending_bind"),
   openMain: (tab?: "gallery" | "ai" | "general" | "shortcuts" | "about") =>
     invoke<void>("open_main_window", { tab: tab ?? null }),
   listGallery: () => invoke<GalleryItem[]>("list_gallery"),

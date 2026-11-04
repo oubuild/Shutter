@@ -18,6 +18,7 @@ import {
   errorText,
   events,
   type AiAction,
+  type AiBind,
   type AiRequest,
   type OcrProviderId,
   type OcrProviderInfo,
@@ -354,39 +355,55 @@ export function Chat() {
   useEffect(() => {
     let disposed = false;
     let off: (() => void) | undefined;
-    events
-      .onAiBind(({ cropId: next, action }) => {
-        if (disposed) return;
-        const rebind = boundCropRef.current !== next;
-        boundCropRef.current = next;
-        setCropId(next);
-        if (!rebind) return;
-        // Clear the preview immediately so an old crop is never shown as current.
-        setPreview(null);
-        setNatural(null);
-        setActs(IDLE_ACTS);
-        setMessages([]);
-        setEditing(false);
-        setZoom("fit");
-        setPickerOpen(false);
-        api.cropPreview(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
-        // "ask" has no preset prompt — it lands on the 对话 tab and waits for
-        // the user's question; the four actions run immediately.
-        if (action === "ask") {
-          setTab("chat");
-        } else {
-          const initial = (action ?? "extract") as ActionTab;
-          setTab(initial);
-          if (action) {
-            // The toolbar already told us what the user wants; run it right away.
-            window.setTimeout(() => {
-              if (!disposed) startRef.current?.(action, next);
-            }, 60);
-          }
+
+    const applyBind = ({ cropId: next, action }: AiBind) => {
+      const rebind = boundCropRef.current !== next;
+      boundCropRef.current = next;
+      setCropId(next);
+      if (!rebind) return;
+      // Clear the preview immediately so an old crop is never shown as current.
+      setPreview(null);
+      setNatural(null);
+      setActs(IDLE_ACTS);
+      setMessages([]);
+      setEditing(false);
+      setZoom("fit");
+      setPickerOpen(false);
+      api.cropPreview(next).then((url) => { if (!disposed) setPreview(url); }).catch(() => undefined);
+      // "ask" has no preset prompt — it lands on the 对话 tab and waits for
+      // the user's question; the four actions run immediately.
+      if (action === "ask") {
+        setTab("chat");
+      } else {
+        const initial = (action ?? "extract") as ActionTab;
+        setTab(initial);
+        if (action) {
+          // The toolbar already told us what the user wants; run it right away.
+          window.setTimeout(() => {
+            if (!disposed) startRef.current?.(action, next);
+          }, 60);
         }
+      }
+    };
+
+    events
+      .onAiBind((payload) => {
+        if (!disposed) applyBind(payload);
       })
       .then((fn) => (disposed ? fn() : (off = fn)))
       .catch(() => undefined);
+
+    // A freshly opened window can miss both `ai://bind` emissions while its
+    // webview was still loading; Rust parks the binding for us to pull here.
+    api
+      .chatPendingBind()
+      .then((pending) => {
+        if (!disposed && pending && boundCropRef.current !== pending.cropId) {
+          applyBind(pending);
+        }
+      })
+      .catch(() => undefined);
+
     return () => {
       disposed = true;
       off?.();

@@ -410,6 +410,7 @@ function installIpcMock() {
           case "open_main_window":
           case "open_chat_window":
           case "exit_app":
+          case "chat_pending_bind":
             resolve(null);
             break;
           case "autostart_status":
