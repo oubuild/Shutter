@@ -199,8 +199,8 @@ pub fn open_settings_page(
             "settings_save",
             "保存设置",
             "view=settings&page=save",
-            460.0,
-            540.0,
+            520.0,
+            500.0,
         ),
         _ => {
             let tab = tab.unwrap_or("ai");
@@ -263,6 +263,13 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
         None => "chat".to_string(),
     };
     log::info!("open_chat: crop={crop_id:?} action={action:?}");
+    // Park the binding for the window to pull on mount — the events below
+    // can fire before a still-loading webview has subscribed (dev cold boot).
+    if let (Some(state), Some(id)) = (app.try_state::<crate::ChatBind>(), crop_id) {
+        if let Ok(mut slot) = state.0.lock() {
+            *slot = Some((id.to_string(), action.map(str::to_string)));
+        }
+    }
     let win = open(app, "chat", &view, "Shutter AI", 900.0, 640.0).map_err(|e| {
         log::error!("open_chat failed: {e:#}");
         e

@@ -462,7 +462,7 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
       : footerState.tone === "saved"
         ? "text-success-600"
         : footerState.tone === "dirty"
-          ? "color-muted"
+          ? "text-amber-600"
           : "color-faint";
 
   return (
@@ -734,45 +734,41 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
               )}
               {section === "general" && (
                 <>
-                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="存储位置">
-                    <div className="pref-group-title">存储位置</div>
+                  <section className="flex flex-col gap-2.5" data-testid="pref-card" aria-label="存储位置">
+                    <div className="pref-group-title pl-0">存储位置</div>
 
-                    <div className="pref-row-top">
-                      <label className="pref-label-pt" htmlFor="save-dir">
-                        保存目录
-                      </label>
-                      <div className="pref-control flex flex-col gap-1.5">
-                        <div className="flex items-center gap-2">
-                          <input
-                            id="save-dir"
-                            className="app-field flex-1 font-mono text-mini"
-                            type="text"
-                            value={form.saveDir ?? ""}
-                            placeholder="留空使用默认目录"
-                            spellCheck={false}
-                            onChange={(e) => update("saveDir", e.target.value)}
-                          />
-                          <button
-                            type="button"
-                            className="btn-action h-8 flex-none"
-                            onClick={() => void pickDirectory()}
-                          >
-                            选择…
-                          </button>
-                          <button
-                            type="button"
-                            className="btn-action h-8 flex-none"
-                            onClick={() => void openSaveDirectory()}
-                          >
-                            打开
-                          </button>
-                        </div>
-                        <p className="app-hint">留空则使用默认目录 ~/Pictures/Shutter。</p>
-                      </div>
+                    <label htmlFor="save-dir" className="block text-[13px] font-500 color-base">
+                      默认保存目录
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        id="save-dir"
+                        className="app-field flex-1 font-mono text-mini"
+                        type="text"
+                        value={form.saveDir ?? ""}
+                        placeholder="留空使用默认目录"
+                        spellCheck={false}
+                        onChange={(e) => update("saveDir", e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn-action h-8 flex-none"
+                        onClick={() => void pickDirectory()}
+                      >
+                        选择…
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-action h-8 flex-none"
+                        onClick={() => void openSaveDirectory()}
+                      >
+                        打开
+                      </button>
                     </div>
+                    <p className="app-hint">留空将恢复默认目录 ~/Pictures/Shutter；截图按时间戳自动命名。</p>
                   </section>
 
-                  <div className="pref-divider" />
+                  <div className="pref-divider ml-0" />
 
                   <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="自动化与行为">
                     <div className="pref-group-title pl-0">自动化与行为</div>
@@ -781,7 +777,11 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                       <label className="block min-w-0 cursor-pointer" htmlFor="auto-save">
                         <b className="block text-[13px] font-500 color-base">自动保存到图库</b>
                         <em className="mt-0.5 block text-mini not-italic leading-relaxed color-faint">
-                          关闭后只有按 ⌘S 保存的截图才会出现在图库
+                          关闭后只有按下{" "}
+                          <kbd className="rounded border border-line bg-sunken px-1 py-px font-sans text-micro color-muted">
+                            ⌘S
+                          </kbd>{" "}
+                          保存的截图才会出现在图库
                         </em>
                       </label>
                       <Toggle
@@ -795,7 +795,11 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                       <label className="block min-w-0 cursor-pointer" htmlFor="copy-after">
                         <b className="block text-[13px] font-500 color-base">自动复制到剪贴板</b>
                         <em className="mt-0.5 block text-mini not-italic leading-relaxed color-faint">
-                          截图确认后立即复制，可直接 ⌘V 粘贴
+                          截图确认后立即写入剪贴板，可直接{" "}
+                          <kbd className="rounded border border-line bg-sunken px-1 py-px font-sans text-micro color-muted">
+                            ⌘V
+                          </kbd>{" "}
+                          粘贴
                         </em>
                       </label>
                       <Toggle
@@ -877,14 +881,12 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
       <footer className="flex flex-none items-center justify-between gap-3 border-t border-base bg-secondary px-6 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className={`inline-block h-2 w-2 flex-none rounded-full ${
+            className={`inline-block h-1.5 w-1.5 flex-none rounded-full ${
               footerState.tone === "error"
                 ? "bg-error-500"
-                : footerState.tone === "saved"
-                  ? "bg-success-500"
-                  : footerState.tone === "dirty"
-                    ? "bg-primary-500 dark:bg-neutral-300"
-                    : "bg-neutral-400 dark:bg-neutral-500"
+                : footerState.tone === "dirty"
+                  ? "bg-amber-500"
+                  : "bg-success-500"
             }`}
             aria-hidden="true"
           />
