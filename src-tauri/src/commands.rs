@@ -507,8 +507,13 @@ pub fn get_settings() -> Settings {
 }
 
 #[tauri::command]
-pub fn save_settings_cmd(app: AppHandle, settings: Settings) -> std::result::Result<(), String> {
+pub fn save_settings_cmd(app: AppHandle, mut settings: Settings) -> std::result::Result<(), String> {
     let previous = settings::load_settings();
+    // The API key lives in the same settings.json but is managed by the
+    // dedicated set_api_key / clear_api_key commands. The settings form never
+    // carries the key (the frontend Settings type omits it), so a bare save
+    // here would clobber it with the serde default (""). Preserve the stored key.
+    settings.api_key = previous.api_key.clone();
     settings::save_settings(&settings).map_err(|e| format!("{e:#}"))?;
 
     // A hotkey only takes effect once the OS accepts it. If the new

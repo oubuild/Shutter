@@ -292,7 +292,16 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
     let capability = crate::scroll::autoscroll::inject_capable();
     let auto_scroll = capability == crate::scroll::autoscroll::InjectCapability::Ok;
     if !auto_scroll {
-        log::info!("[长截图] 无辅助功能权限（{capability:?}）→ 手动滚动模式");
+        log::info!("[长截图] 无辅助功能权限（{capability:?}）");
+        // macOS 无权限时主动引导用户去系统设置开启，而不是静默降级到
+        // 手动滚动（用户会以为是 bug）；非 macOS 无自动滚动能力，直接手动。
+        if capability == crate::scroll::autoscroll::InjectCapability::NoPermission
+            && prompt_accessibility(app)
+        {
+            // 用户选择去授权：取消本次长截图，授权后重新开始即可自动滚动。
+            teardown(app);
+            return Ok(());
+        }
     }
 
     // Listen for the user's own wheel input so manual scrolling pauses cleanly.
@@ -341,6 +350,43 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
     arm_bar_watchdog(app.clone(), session_epoch);
 
     Ok(())
+}
+
+/// 无辅助功能权限时，弹框引导用户去系统设置开启。返回 true 表示用户选择
+/// 「打开系统设置」（调用方取消本次长截图，授权后重新开始即可自动滚动）。
+#[cfg(target_os = "macos")]
+fn prompt_accessibility(app: &AppHandle) -> bool {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    use tauri_plugin_opener::OpenerExt;
+
+    let open_settings = app
+        .dialog()
+        .message(
+            "长截图需要「辅助功能」权限才能自动滚动页面。\n\n\
+             现在去系统设置开启，授权后重新开始即可自动滚动；\
+             也可以继续，用手动滚动完成截图。",
+        )
+        .title("需要辅助功能权限")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "打开系统设置".into(),
+            "手动滚动".into(),
+        ))
+        .blocking_show();
+
+    if open_settings {
+        let url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+        if let Err(e) = app.opener().open_url(url, None::<&str>) {
+            log::warn!("[长截图] 打开辅助功能设置失败: {e}");
+        }
+    }
+    open_settings
+}
+
+/// 非 macOS 没有辅助功能 TCC 权限，`capability` 恒为 `Unsupported`，不会走到
+/// 弹框分支；保留一个返回 false 的桩以满足跨平台编译。
+#[cfg(not(target_os = "macos"))]
+fn prompt_accessibility(_app: &AppHandle) -> bool {
+    false
 }
 
 /// `scroll_screenshot_bar_panel_loaded`: the bar's mount handshake. The
