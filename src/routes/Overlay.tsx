@@ -1,12 +1,12 @@
 /** The screenshot overlay: frozen desktop + selection + annotation canvas. */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Layer, Stage } from "react-konva";
 import Konva from "konva";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Toolbar, type ToolbarAction } from "../components/Toolbar";
-import { ShapeNode } from "../canvas/ShapeNode";
+import { HighlightCover, ShapeNode } from "../canvas/ShapeNode";
 import {
   DEFAULT_TOOL_STYLE,
   MOSAIC_PIXEL_MAX,
@@ -53,7 +53,34 @@ type Drag =
   | { mode: "move"; grab: Point; origin: Box }
   | { mode: "resize"; handle: Exclude<Handle, null | "move">; origin: Box }
   | { mode: "draw"; start: Point }
-  | { mode: "shape"; id: string; grab: Point; origin: Shape };
+  | { mode: "shape"; id: string; grab: Point; origin: Shape }
+  | { mode: "shapeResize"; id: string; corner: ShapeCorner; origin: Shape };
+
+/** Corner handles for resizing a committed annotation (reference editor
+ * transform): only two-point shapes carry a transformable rectangle. */
+type ShapeCorner = "nw" | "ne" | "se" | "sw";
+
+const SHAPE_CORNERS: Array<{ corner: ShapeCorner; dx: number; dy: number }> = [
+  { corner: "nw", dx: 0, dy: 0 },
+  { corner: "ne", dx: 1, dy: 0 },
+  { corner: "se", dx: 1, dy: 1 },
+  { corner: "sw", dx: 0, dy: 1 },
+];
+
+function isResizable(s: Shape): boolean {
+  switch (s.kind) {
+    case "rect":
+    case "ellipse":
+    case "arrow":
+    case "highlight":
+      return true;
+    case "mosaic":
+      // A freehand smear has no rectangle to transform; move-only.
+      return s.rectSelect;
+    default:
+      return false;
+  }
+}
 
 /** Inline text editor: `id` is set when re-editing an existing text shape. */
 type TextEdit = { at: Point; value: string; id?: string; style?: ToolStyle };
@@ -82,6 +109,29 @@ export function Overlay({ monitorId }: Props) {
   /** Every per-tool drawing parameter; the toolbar's bubbles edit this. */
   const [style, setStyle] = useState<ToolStyle>(DEFAULT_TOOL_STYLE);
   const [shapes, setShapes] = useState<Shape[]>([]);
+  /** Paint order for rendering and hit tests: the reference funnels every
+   * highlight into a `hight` group created with the FIRST highlight — its
+   * backdrop wash covers shapes drawn before that point, while marks
+   * committed after it stay readable above. So the order is: shapes drawn
+   * before the first highlight, then the highlight wash (one shared
+   * HighlightCover with the shapes as holes), then everything after. */
+  const highlightOrder = useMemo(() => {
+    const isHighlight = (s: Shape): s is Extract<Shape, { kind: "highlight" }> =>
+      s.kind === "highlight";
+    const first = shapes.findIndex(isHighlight);
+    if (first === -1) {
+      return { before: shapes, highlights: [], after: [] as Shape[] };
+    }
+    return {
+      before: shapes.slice(0, first),
+      highlights: shapes.filter(isHighlight),
+      after: shapes.filter((s, i) => i > first && !isHighlight(s)),
+    };
+  }, [shapes]);
+  const orderedShapes = useMemo(
+    () => [...highlightOrder.before, ...highlightOrder.highlights, ...highlightOrder.after],
+    [highlightOrder],
+  );
   const [draft, setDraft] = useState<Shape | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -267,6 +317,10 @@ export function Overlay({ monitorId }: Props) {
   // Debug affordance: `?debug=box` preselects a centred region so the toolbar
   // can be exercised without a mouse (used by automation).
   const debugBox = new URLSearchParams(window.location.search).has("debug");
+  /** `?boot=scroll` — the tray's 长截图 entry starts the scroll session as
+   * soon as the user frames a usable selection (consumed by the effect below
+   * `startScroll`). */
+  const bootTool = new URLSearchParams(window.location.search).get("boot");
   useEffect(() => {
     if (!debugBox || !monitor || box) return;
     setBox({
@@ -298,6 +352,23 @@ export function Overlay({ monitorId }: Props) {
       setMenu(null);
       const p = pos();
 
+      // Corner-resize of the already-selected annotation (the reference
+      // editor's transform): armed in EVERY tool, so a freshly drawn shape
+      // can be grabbed by its corner without switching back to select. The
+      // ±10px corner zone is small enough never to fight freehand drawing.
+      // Visual handles are pointer-events:none — hit testing happens here,
+      // just like the crop box's hitHandle.
+      if (selectedId) {
+        const sel = shapes.find((s) => s.id === selectedId);
+        if (sel && isResizable(sel)) {
+          const corner = hitShapeCorner(shapeBounds(sel), p);
+          if (corner) {
+            drag.current = { mode: "shapeResize", id: sel.id, corner, origin: sel };
+            return;
+          }
+        }
+      }
+
       // Moving/resizing belongs to the select tool. Without this gate a
       // drawing tool pressed inside the selection grabbed the box and moved it,
       // which is why annotations only worked outside the screenshot area.
@@ -310,7 +381,7 @@ export function Overlay({ monitorId }: Props) {
           setSelectedId(null);
           return;
         }
-        const hit = hitShape(shapes, p);
+        const hit = hitShape(orderedShapes, p);
         if (hit) {
           drag.current = { mode: "shape", id: hit.id, grab: p, origin: hit };
           // Grabbing a shape selects it: the dashed outline says "draggable",
@@ -376,13 +447,18 @@ export function Overlay({ monitorId }: Props) {
         return;
       }
       if (!box) return;
+      // Starting a fresh shape deselects the previous one — its corner
+      // handles must not linger while drawing.
+      setSelectedId(null);
       drag.current = { mode: "draw", start: p };
       setDraft(makeShape(tool, p, p));
     },
     // makeShape reads style/shapes — they must be listed or the callback keeps
     // the values from the render it was last rebuilt on and new shapes get
-    // stale styles (and a frozen step counter).
-    [box, busy, pickerFmt, pos, shapes, style, tool],
+    // stale styles (and a frozen step counter). selectedId feeds the
+    // corner-resize check: without it the closure keeps a stale selection and
+    // the handles never arm.
+    [box, busy, pickerFmt, pos, selectedId, shapes, style, tool],
   );
 
   const onMouseMove = useCallback(() => {
@@ -394,10 +470,15 @@ export function Overlay({ monitorId }: Props) {
     // otherwise resume a stale selection and resize the crop box under the
     // cursor — the eyedropper's click appeared to destroy the selection.
     const dragAllowed =
-      d !== null &&
-      (d.mode === "select" || d.mode === "move" || d.mode === "resize" || d.mode === "shape"
-        ? tool === "select"
-        : tool !== "select" && tool !== "picker");
+      d === null
+        ? false
+        : // Corner resize is armed in every tool (it only ever starts from a
+          // selected shape's ±10px corner zone).
+          d.mode === "shapeResize"
+          ? true
+          : d.mode === "select" || d.mode === "move" || d.mode === "resize" || d.mode === "shape"
+            ? tool === "select"
+            : tool !== "select" && tool !== "picker";
     if (d && !dragAllowed) {
       drag.current = null;
       setDraft(null);
@@ -428,10 +509,23 @@ export function Overlay({ monitorId }: Props) {
         return;
       }
       setHoverWin(null);
+      // Near a corner of the selected annotation (any tool — the corner zone
+      // arms resize everywhere): the diagonal resize cursor. The handles
+      // themselves are pointer-events:none.
+      const selC = selectedId ? shapes.find((s) => s.id === selectedId) : null;
+      const corner = selC && isResizable(selC) ? hitShapeCorner(shapeBounds(selC), p) : null;
+      if (corner === "nw" || corner === "se") {
+        setCursor("nwse-resize");
+        return;
+      }
+      if (corner === "ne" || corner === "sw") {
+        setCursor("nesw-resize");
+        return;
+      }
       if (box && tool === "select") {
         // A committed shape under the cursor drags it (the reference's
         // "select and move"); only empty space moves/resizes the crop.
-        if (hitShape(shapes, p)) {
+        if (hitShape(orderedShapes, p)) {
           setCursor("move");
           return;
         }
@@ -485,8 +579,14 @@ export function Overlay({ monitorId }: Props) {
         setCursor("move");
         break;
       }
+      case "shapeResize": {
+        setShapes((prev) =>
+          prev.map((s) => (s.id === d.id ? resizeShape(d.origin, d.corner, p) : s)),
+        );
+        break;
+      }
     }
-  }, [box, draft, hitWin, pos, shapes, stageSize.h, stageSize.w, tool]);
+  }, [box, draft, hitWin, pos, selectedId, shapes, stageSize.h, stageSize.w, tool]);
 
   // Diagnostic: the eyedropper UI vanished right after being selected, so record
   // every tool transition together with the selection state that gates the
@@ -584,6 +684,9 @@ export function Overlay({ monitorId }: Props) {
     if (d.mode === "draw" && draft) {
       if (isShapeUsable(draft)) {
         setShapes((prev) => [...prev, draft]);
+        // Select what was just drawn (the reference editor selects the new
+        // shape): the corner handles appear immediately, ready to resize.
+        setSelectedId(draft.id);
         // Reference increments the badge counter on creation, so the next
         // number follows the one just placed.
         if (draft.kind === "step") {
@@ -627,7 +730,7 @@ export function Overlay({ monitorId }: Props) {
       const p = pos();
       const up = e.evt.deltaY < 0;
       const step = up ? 1 : -1;
-      const target = hitShape(shapes, p);
+      const target = hitShape(orderedShapes, p);
       // Keep the page from scrolling under the canvas.
       e.evt.preventDefault();
 
@@ -1207,6 +1310,18 @@ export function Overlay({ monitorId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box, busy, monitor]);
 
+  // Tray 长截图 boots the overlay with `?boot=scroll`: frame a selection and
+  // the scroll session starts on its own, as if the toolbar's 长截图 button had
+  // been pressed (the reference tray opens the same flow from its menu).
+  const bootFired = useRef(false);
+  useEffect(() => {
+    if (bootTool !== "scroll" || bootFired.current) return;
+    if (!box || !monitor || busy || !isUsableSelection(box)) return;
+    bootFired.current = true;
+    void startScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [box, monitor, busy]);
+
   const reset = () => {
     setBox(null);
     setShapes([]);
@@ -1263,10 +1378,25 @@ export function Overlay({ monitorId }: Props) {
             `annotationLayerRef` is what export uses — keep it on this layer if
             more layers are ever added. */}
         <Layer ref={annotationLayerRef}>
-          {shapes.map((s) => (
+          {highlightOrder.before.map((s) => (
             <ShapeNode key={s.id} shape={s} source={sourceRef.current} />
           ))}
-          {draft && <ShapeNode shape={draft} source={sourceRef.current} />}
+          {box && (highlightOrder.highlights.length > 0 || draft?.kind === "highlight") && (
+            <HighlightCover
+              box={box}
+              holes={highlightOrder.highlights}
+              draft={draft?.kind === "highlight" ? draft : null}
+              source={sourceRef.current}
+              opacity={style.highlightOpacity}
+              blur={style.highlightBlur}
+            />
+          )}
+          {highlightOrder.after.map((s) => (
+            <ShapeNode key={s.id} shape={s} source={sourceRef.current} />
+          ))}
+          {draft && draft.kind !== "highlight" && (
+            <ShapeNode shape={draft} source={sourceRef.current} />
+          )}
         </Layer>
       </Stage>
       }
@@ -1309,17 +1439,32 @@ export function Overlay({ monitorId }: Props) {
       )}
 
       {/* Selection outline around the grabbed annotation: drag moves it,
-          Delete removes it, double-click re-edits text. */}
+          corner handles resize it (two-point shapes), Delete removes it,
+          double-click re-edits text. */}
       {selectedOutline && (
-        <div
-          className="overlay-shape-sel"
-          style={{
-            left: selectedOutline.x,
-            top: selectedOutline.y,
-            width: selectedOutline.width,
-            height: selectedOutline.height,
-          }}
-        />
+        <>
+          <div
+            className="overlay-shape-sel"
+            style={{
+              left: selectedOutline.x,
+              top: selectedOutline.y,
+              width: selectedOutline.width,
+              height: selectedOutline.height,
+            }}
+          />
+          {selectedShape &&
+            isResizable(selectedShape) &&
+            SHAPE_CORNERS.map(({ corner, dx, dy }) => (
+              <div
+                key={corner}
+                className={`overlay-handle shape-handle h-${corner}`}
+                style={{
+                  left: selectedOutline.x + selectedOutline.width * dx,
+                  top: selectedOutline.y + selectedOutline.height * dy,
+                }}
+              />
+            ))}
+        </>
       )}
 
       {box && (
@@ -1659,15 +1804,81 @@ function shapeBounds(shape: Shape): Box {
   }
 }
 
-/** Topmost committed shape under the point, if any. */
+/** Topmost committed shape under the point, if any.
+ *
+ * Hit bounds are padded by 8px: the reference ships every highlight a hidden
+ * 15px-wide hit stroke (`strokeWidth: 15` in `c0`) so a narrow strip stays
+ * grabbable; the same slack here is harmless for large shapes and decisive
+ * for thin pen strokes and highlights. */
 function hitShape(shapes: Shape[], p: Point): Shape | null {
+  const PAD = 8;
   for (let i = shapes.length - 1; i >= 0; i--) {
     const b = shapeBounds(shapes[i]);
-    if (p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
+    if (
+      p.x >= b.x - PAD &&
+      p.x <= b.x + b.width + PAD &&
+      p.y >= b.y - PAD &&
+      p.y <= b.y + b.height + PAD
+    ) {
       return shapes[i];
     }
   }
   return null;
+}
+
+/** Corner of a selected shape's outline under the pointer, if any. The
+ * visual handles are pointer-events:none — this is their hit test, mirroring
+ * the crop box's `hitHandle`. */
+function hitShapeCorner(b: Box, p: Point): ShapeCorner | null {
+  const r = 10;
+  for (const { corner, dx, dy } of SHAPE_CORNERS) {
+    const cx = b.x + b.width * dx;
+    const cy = b.y + b.height * dy;
+    if (Math.abs(p.x - cx) <= r && Math.abs(p.y - cy) <= r) return corner;
+  }
+  return null;
+}
+
+/** Resize a two-point shape by dragging one bbox corner (the reference
+ * editor's transform): the opposite corner stays anchored and `from`/`to`
+ * scale proportionally into the new box, so an arrow keeps its geometry
+ * instead of collapsing onto the pointer. */
+function resizeShape(origin: Shape, corner: ShapeCorner, p: Point): Shape {
+  if (!("from" in origin && "to" in origin)) return origin;
+  if (origin.kind === "mosaic" && !origin.rectSelect) return origin;
+  const ox = Math.min(origin.from.x, origin.to.x);
+  const oy = Math.min(origin.from.y, origin.to.y);
+  const ow = Math.max(1, Math.abs(origin.to.x - origin.from.x));
+  const oh = Math.max(1, Math.abs(origin.to.y - origin.from.y));
+  // The dragged corner moves to the pointer; the opposite corner anchors.
+  let ax = ox;
+  let ay = oy;
+  if (corner === "nw") {
+    ax = ox + ow;
+    ay = oy + oh;
+  } else if (corner === "ne") {
+    ay = oy + oh;
+  } else if (corner === "sw") {
+    ax = ox + ow;
+  }
+  const x0 = Math.min(ax, p.x);
+  const y0 = Math.min(ay, p.y);
+  const sx = Math.max(4, Math.abs(p.x - ax)) / ow;
+  const sy = Math.max(4, Math.abs(p.y - ay)) / oh;
+  const map = (q: Point): Point => ({ x: x0 + (q.x - ox) * sx, y: y0 + (q.y - oy) * sy });
+  const from = map(origin.from);
+  const to = map(origin.to);
+  switch (origin.kind) {
+    case "rect":
+    case "ellipse":
+    case "arrow":
+    case "highlight":
+      return { ...origin, from, to };
+    case "mosaic":
+      return { ...origin, from, to, points: [] };
+    default:
+      return origin;
+  }
 }
 
 /** Topmost text shape under the point; double-click edits it. */

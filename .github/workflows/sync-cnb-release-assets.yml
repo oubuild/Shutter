@@ -1,12 +1,19 @@
 name: Sync CNB Release Assets
 
 # Copies one GitHub release (metadata + installer assets) to the CNB mirror so
-# mainland users can download without a GitHub connection. Runs after a normal
-# release: dispatch it with the tag once build.yml has published.
+# mainland users can download without a GitHub connection. Runs automatically
+# when build.yml publishes a release (release:released event), and can still be
+# dispatched by hand to re-sync or retry a past tag.
 #
 # Requires the CNB_TOKEN secret and the mirror repo to exist (see
 # sync-cnb-release.mjs for the repository default).
 on:
+  # Auto: when a GitHub release goes live (build.yml flips the draft), sync its
+  # installers to the CNB mirror so mainland users can download without GitHub.
+  # The tag comes from the release event itself.
+  release:
+    types: [released]
+  # Manual: re-sync a past release or retry a failed sync.
   workflow_dispatch:
     inputs:
       tag:
@@ -19,6 +26,8 @@ permissions:
 
 env:
   CNB_REPOSITORY: "ryanuo/shutter"
+  # release event → github.event.release.tag_name; manual dispatch → inputs.tag.
+  TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   sync-release-to-cnb:
@@ -30,7 +39,7 @@ jobs:
 
       - name: Download GitHub release assets
         env:
-          TAG_NAME: ${{ inputs.tag }}
+          TAG_NAME: ${{ env.TAG_NAME }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -62,7 +71,7 @@ jobs:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
         run: |
           node .github/scripts/cleanup-cnb-releases.mjs \
-            --current-tag "${{ inputs.tag }}" \
+            --current-tag "${{ env.TAG_NAME }}" \
             --tag-pattern '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             --retain 5 \
             --apply

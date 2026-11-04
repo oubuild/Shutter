@@ -44,13 +44,12 @@ tauri-plugin-autostart = "2"
 url = "2"
 # Verify every downloaded model artifact before it can be installed.
 sha2 = "0.10"
+# Long-screenshot FFT-NCC displacement estimator (reference `fft_ncc`): column
+# cross-correlation when the row-signature matcher's evidence is too weak.
+# Pure Rust, no system dependencies.
+rustfft = "6"
 
-# The API key lives in the OS credential store. `keyring` picks its backend at
-# compile time from these features, and the backend is per-platform, so each
-# target enables exactly one. A platform without a backend silently falls back
-# to keyring's in-memory mock, which would lose the key on every restart.
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
 # Scroll-capture event injection/tap: the same CoreGraphics APIs the reference
 # app uses (CGEventCreateScrollWheelEvent2 + CGEventPost, CGEventTapCreate).
 # Both crates are already in Cargo.lock via transitive deps, so the offline
@@ -75,13 +74,11 @@ rapidocr-core = "0.2.2"
 # must unify on exactly rc.12 (ONNX Runtime 1.24.2 via download-binaries).
 ort = "=2.0.0-rc.12"
 
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
-
-# Secret Service over D-Bus (GNOME Keyring / KWallet). `crypto-rust` keeps the
-# session key exchange pure-Rust so the build needs no OpenSSL headers.
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+# The API key used to live in the OS credential store (`keyring`: Keychain /
+# Credential Manager / Secret Service). The macOS Keychain proved unreliable,
+# and consistency beats platform variance: the key now persists in
+# settings.json like every other setting, so no platform needs a credential
+# backend.
 
 [features]
 default = ["custom-protocol"]

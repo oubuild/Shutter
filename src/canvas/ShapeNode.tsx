@@ -199,9 +199,10 @@ function useMosaicCanvas(
     if (!bigCtx) return;
     if (mode === "glassmorphism") {
       // The reference's second mode is a Gaussian blur, not pixel blocks:
-      // same downscale, but smoothing stays on for the upscale.
+      // same downscale, but smoothing stays on for the upscale. (No
+      // `ctx.filter` — WKWebView's filter support is unreliable and can
+      // silently draw nothing.)
       bigCtx.imageSmoothingEnabled = true;
-      bigCtx.filter = `blur(${Math.max(1, size / 3)}px)`;
     } else {
       bigCtx.imageSmoothingEnabled = false;
     }
@@ -305,6 +306,131 @@ function useMaskedSmear(
   return masked;
 }
 
+/** Normalized bounding box of a two-point shape. */
+type Box = { x: number; y: number; width: number; height: number };
+
+/**
+ * The reference highlight is a spotlight, not a colour block: one
+ * full-selection backdrop (`hightlightBgRect`) carries a `glassmorphism`
+ * filter — the content behind it is Gaussian-blurred (`highLightBlur * 10`
+ * px, `T2` in the reference bundle is a pure separable blur with NO tint)
+ * — while every drawn highlight shape is an `eraser:"path"` hole punching
+ * back through to the crisp original. The reference's highlight panel has
+ * shape/opacity/blur only; the brush colour never touches the wash.
+ * (`opacity` is the wash strength: 1 = fully blurred, lower blends the blur
+ * against the sharp original.)
+ *
+ * Konva has no backdrop filter, so the wash is composited offscreen like the
+ * mosaic: copy the selection region from the source, blur it, then
+ * `destination-out` the hole silhouettes. The holes stay transparent, and
+ * the DOM screenshot under the canvas shows through — which is exactly the
+ * unblurred original.
+ */
+export function HighlightCover({
+  box,
+  holes,
+  draft,
+  source,
+  opacity,
+  blur,
+}: {
+  box: Box;
+  holes: Array<Extract<Shape, { kind: "highlight" }>>;
+  draft?: Extract<Shape, { kind: "highlight" }> | null;
+  source?: HTMLImageElement | null;
+  opacity: number;
+  blur: number;
+}) {
+  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
+  // The holes list is a fresh array every render; stringifying it keeps the
+  // rebuild keyed on actual geometry (which is what the draft grows).
+  const holesKey = useMemo(() => JSON.stringify([holes, draft ?? null]), [holes, draft]);
+
+  useEffect(() => {
+    if (!source || !source.naturalWidth) {
+      setCanvas(null);
+      return;
+    }
+    const scale = source.naturalWidth / window.innerWidth;
+    const w = Math.max(1, Math.round(box.width * scale));
+    const h = Math.max(1, Math.round(box.height * scale));
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const ctx = out.getContext("2d");
+    if (!ctx) return;
+
+    // Blurred copy of the selection, at the wash strength so `opacity`
+    // blends blur against the sharp original underneath. The blur is a
+    // downscale/upscale round-trip — the reference's own large-radius path
+    // (`B2` in its bundle): the wash radius is always slider×10, deep in
+    // downscale territory, and WKWebView's `ctx.filter` is unreliable here
+    // (it can silently draw nothing, which made the wash disappear).
+    const radiusCss = Math.max(1, blur * 10);
+    const factor = Math.max(2, Math.round(radiusCss * scale * 0.5));
+    const smallW = Math.max(1, Math.round(w / factor));
+    const smallH = Math.max(1, Math.round(h / factor));
+    const small = document.createElement("canvas");
+    small.width = smallW;
+    small.height = smallH;
+    const sctx = small.getContext("2d");
+    if (!sctx) return;
+    sctx.imageSmoothingEnabled = true;
+    sctx.drawImage(source, box.x * scale, box.y * scale, w, h, 0, 0, smallW, smallH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(small, 0, 0, smallW, smallH, 0, 0, w, h);
+    // The reference's own spec for the wash tint is its `hightlightBgRect`
+    // replay path: `fill:"black", opacity: highLightOpacity` — a black dim
+    // over the blur. 1 = solid black, 0.5 = darkened frosted, 0 = pure blur.
+    ctx.globalAlpha = opacity;
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = 1;
+
+    // Holes: erase back to the crisp original underneath.
+    ctx.globalCompositeOperation = "destination-out";
+    const punch = (s: Extract<Shape, { kind: "highlight" }>) => {
+      const x = (Math.min(s.from.x, s.to.x) - box.x) * scale;
+      const y = (Math.min(s.from.y, s.to.y) - box.y) * scale;
+      const rw = Math.abs(s.to.x - s.from.x) * scale;
+      const rh = Math.abs(s.to.y - s.from.y) * scale;
+      ctx.beginPath();
+      if (s.shape === "ellipse") {
+        ctx.ellipse(x + rw / 2, y + rh / 2, rw / 2, rh / 2, 0, 0, Math.PI * 2);
+      } else {
+        // arcTo, not roundRect: Safari only gained the canvas roundRect in
+        // 16.4 and the app supports macOS 12.
+        const r = Math.min((s.shape === "roundRect" ? 10 : 0) * scale, rw / 2, rh / 2);
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + rw, y, x + rw, y + rh, r);
+        ctx.arcTo(x + rw, y + rh, x, y + rh, r);
+        ctx.arcTo(x, y + rh, x, y, r);
+        ctx.arcTo(x, y, x + rw, y, r);
+        ctx.closePath();
+      }
+      ctx.fill();
+    };
+    holes.forEach(punch);
+    if (draft) punch(draft);
+    ctx.globalCompositeOperation = "source-over";
+
+    setCanvas(out);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, box.x, box.y, box.width, box.height, opacity, blur, holesKey]);
+
+  if (!canvas) return null;
+  return (
+    <KImage
+      image={canvas}
+      x={box.x}
+      y={box.y}
+      width={box.width}
+      height={box.height}
+      listening={false}
+    />
+  );
+}
+
 export function ShapeNode({ shape, source }: Props) {
   const box = useMemo(() => {
     if (!("from" in shape) || !("to" in shape)) return null;
@@ -397,44 +523,10 @@ export function ShapeNode({ shape, source }: Props) {
         />
       );
 
-    case "highlight": {
-      // Reference highlight is a frosted-glass wash, not a colour block: the
-      // shape only decides the silhouette, and `blur` softens its edge.
-      const common = {
-        x: box!.x,
-        y: box!.y,
-        width: box!.width,
-        height: box!.height,
-        fill: shape.color,
-        opacity: shape.opacity,
-        shadowColor: shape.color,
-        shadowBlur: shape.blur * 2,
-        shadowOpacity: shape.opacity * 0.6,
-        listening: false,
-      };
-      if (shape.shape === "ellipse") {
-        return (
-          <Ellipse
-            x={box!.x + box!.width / 2}
-            y={box!.y + box!.height / 2}
-            radiusX={box!.width / 2}
-            radiusY={box!.height / 2}
-            fill={shape.color}
-            opacity={shape.opacity}
-            shadowColor={shape.color}
-            shadowBlur={shape.blur * 2}
-            shadowOpacity={shape.opacity * 0.6}
-            listening={false}
-          />
-        );
-      }
-      return (
-        <Rect
-          {...common}
-          cornerRadius={shape.shape === "roundRect" ? 10 : 0}
-        />
-      );
-    }
+    case "highlight":
+      // Highlight shapes render as holes inside the shared HighlightCover
+      // wash (see Overlay's layer composition); nothing to draw here.
+      return null;
 
     case "mosaic":
       return <MosaicShape shape={shape} source={source} />;

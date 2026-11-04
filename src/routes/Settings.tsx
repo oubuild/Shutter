@@ -31,7 +31,7 @@ import { Toggle } from "../components/Toggle";
  *
  * 1. The stored API key is write-only. Rust never returns it, so the password
  *    field starts empty and its value means "replace the stored key"; leaving it
- *    empty on save skips the keychain entirely.
+ *    empty on save keeps the stored key as is.
  * 2. A configuration only takes effect once it is known to work. "测试连接"
  *    proves the endpoint/model/key triple; saving without a green test asks for
  *    confirmation first, because a typo'd base URL otherwise fails silently at
@@ -281,7 +281,7 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
   /**
    * Write the key (if the user typed one) and then the settings.
    *
-   * The keychain goes first: if it fails, the config must not be updated to
+   * The key goes first: if it fails, the config must not be updated to
    * point at a key that was never stored.
    */
   const persist = useCallback(
@@ -708,10 +708,10 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                             }`}
                           >
                             <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
-                            {keyStatus ? "已在钥匙串" : "未设置"}
+                            {keyStatus ? "已保存" : "未设置"}
                           </span>
                           <p className="app-hint inline">
-                            点「保存」时才会写入钥匙串；留空表示沿用已保存的密钥。
+                            点「保存」时才会写入；留空表示沿用已保存的密钥。
                             {keyStatus && (
                               <>
                                 {" "}

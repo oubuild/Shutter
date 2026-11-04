@@ -67,6 +67,9 @@ pub fn ensure(app: &AppHandle, pin_id: &str, rect: Rect) -> Result<WebviewWindow
     .skip_taskbar(true)
     .visible_on_all_workspaces(true)
     .build()?;
+    // Floating (3) sits below the Dock (20); a pin dragged near the screen
+    // edge would otherwise be covered by it.
+    crate::windows::raise_above_dock(&win);
 
     Ok(win)
 }

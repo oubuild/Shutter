@@ -9,3 +9,11 @@ report/
 .DS_Store
 
 .zcode
+
+# WorkBuddy 本地工作数据
+.workbuddy/
+
+# 官网展示截图的调试素材（AI 生成壁纸 / 网格背景，可重新生成）
+public/showcase-bg.svg
+public/showcase-wallpaper.png
+public/showcase-wallpaper-src.png

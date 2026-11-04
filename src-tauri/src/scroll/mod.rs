@@ -15,7 +15,10 @@
 //!   `scroll_screenshot_bar_panel_loaded` or the session tears itself down.
 
 use crate::compose::PixelRect;
-use crate::scroll::pipeline::{decide, direction_reversed, median_recent, FrameDecision};
+use crate::scroll::pipeline::{
+    choose_line_height, decide_with, direction_reversed, median_recent, rescue_offset,
+    FrameDecision,
+};
 use crate::scroll::stitch::Stitcher;
 use crate::types::Rect;
 use anyhow::{anyhow, Result};
@@ -701,6 +704,9 @@ fn worker_loop(
     };
 
     let mut stitcher = Stitcher::new(first);
+    // Signature height for the whole session, picked from the first capture
+    // (reference `preprocess::set_line_height` caches one value per page).
+    let line_height = choose_line_height(stitcher.last_frame());
     let mut auto = auto_scroll;
     let mut armed = auto_scroll;
     let mut paused_by_user = false;
@@ -783,7 +789,7 @@ fn worker_loop(
 
         // 3. Decide.
         let prior = median_recent(stitcher.history(), 5);
-        let decision = decide(stitcher.last_frame(), &frame, prior);
+        let decision = decide_with(stitcher.last_frame(), &frame, prior, line_height);
 
         match decision {
             FrameDecision::Still => {
@@ -832,6 +838,28 @@ fn worker_loop(
             FrameDecision::TooLarge
             | FrameDecision::LowConfidence
             | FrameDecision::VerifyFailed => {
+                // Older-baseline rescue (reference `relative_offset_from_older`
+                // over the frame ring): the same capture can still align
+                // against the frame before the last one when this particular
+                // baseline aliases — and it must pass the same verifier
+                // before anything is appended.
+                if let Some(offset) = rescue_offset(&stitcher, &frame, prior, line_height) {
+                    log::info!("[长截图][v2] 旧基线救援成功 offset={offset}");
+                    let added = stitcher.append(
+                        frame,
+                        &FrameDecision::Append {
+                            offset,
+                            confidence: 1.0,
+                        },
+                        offset,
+                    );
+                    if added > 0 {
+                        publish_preview(&app, stitcher.last_frame());
+                    }
+                    consecutive_rejects = 0;
+                    bottom_stills = 0;
+                    continue 'outer;
+                }
                 // 原地重抓: the page may still be animating; re-capture the
                 // same position and retry a bounded number of times.
                 let reason = match &decision {
@@ -846,7 +874,7 @@ fn worker_loop(
                     let Ok(retry) = capture_from(&display, rect) else {
                         continue;
                     };
-                    let d2 = decide(stitcher.last_frame(), &retry, prior);
+                    let d2 = decide_with(stitcher.last_frame(), &retry, prior, line_height);
                     match d2 {
                         FrameDecision::Append { offset, .. } => {
                             let added = stitcher.append(retry.clone(), &d2, offset);

@@ -2,8 +2,9 @@
  *
  * Icon-only, matching the reference chrome: a 44px bar with 36x36 hit targets,
  * 8px radius, 8px gaps, dividers between groups, and the shadcn/ui zinc
- * primary for the active tool. Every control carries a `title` so name and
- * shortcut stay discoverable on hover.
+ * primary for the active tool. Every control carries a hover tip above it
+ * (`.cap-tip`, mirroring the reference antd Tooltip): tools show
+ * `名称 | ⌨ 快捷键`, fixed actions show `名称 (快捷键)`.
  *
  * Parameters follow the reference model (`.tmp/analysis/toolbar-diff.md` §D2b):
  * the bar itself has **no** persistent colour chip, width slider or fill toggle.
@@ -13,6 +14,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ARROW_HEADS,
@@ -25,6 +27,7 @@ import {
   STROKE_DOT_SIZES,
   STROKE_WIDTHS,
   TEXT_SIZES,
+  TOOL_KEYS,
   TOOL_LABELS,
   type ToolId,
   type ToolStyle,
@@ -68,6 +71,50 @@ const TOOLS: ToolId[] = [
   "step",
   "picker",
 ];
+
+/** ToolId → its digit key (inverse of `TOOL_KEYS`); `select` has none. */
+const KEY_OF_TOOL: Partial<Record<ToolId, string>> = Object.fromEntries(
+  Object.entries(TOOL_KEYS).map(([key, id]) => [id, key]),
+) as Partial<Record<ToolId, string>>;
+
+/** Keyboard glyph for the tip, standing in for the reference's
+ * `icon-keyboardOutlined` beside the shortcut. */
+function KeyboardGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="6" width="18" height="12" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M7 10h.01M10.5 10h.01M14 10h.01M17 10h.01M8 14h8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** Tip for a tool button: `名称 | ⌨ 快捷键` (the reference's rich tooltip). */
+function toolTip(label: string, key?: string) {
+  return (
+    <>
+      <span className="cap-tip-name">{label}</span>
+      {key && (
+        <>
+          <span className="cap-tip-sep" />
+          <span className="cap-tip-key">
+            <KeyboardGlyph />
+            {key}
+          </span>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Tip for a fixed action: `名称 (快捷键)` (reference `notAllowEdit` form). */
+function fixedTip(label: string, key?: string) {
+  return <span className="cap-tip-name">{key ? `${label} (${key})` : label}</span>;
+}
 
 /** AI actions: the "cloud" half of the bar, separated from local tools. */
 const AI_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
@@ -190,9 +237,10 @@ export function Toolbar(props: Props) {
         size: [el.offsetWidth, el.offsetHeight],
         rect: [Math.round(el.getBoundingClientRect().left), Math.round(el.getBoundingClientRect().top)],
         buttons: el.querySelectorAll("button").length,
-        // Icon-only means no button should have text content.
-        textButtons: Array.from(el.querySelectorAll("button")).filter((b) =>
-          (b.textContent ?? "").trim(),
+        // Icon-only means no button should have text content — the hover tips
+        // inside .cap-tip are the one sanctioned exception.
+        textButtons: Array.from(el.querySelectorAll("button")).filter(
+          (b) => !b.querySelector(".cap-tip") && (b.textContent ?? "").trim(),
         ).length,
       }),
     }).catch(() => undefined);
@@ -217,6 +265,7 @@ export function Toolbar(props: Props) {
           <IconButton
             key={id}
             title={TOOL_LABELS[id]}
+            tip={toolTip(TOOL_LABELS[id], KEY_OF_TOOL[id])}
             active={tool === id}
             svg={ICONS[id]}
             onClick={() => props.onTool(id)}
@@ -228,6 +277,7 @@ export function Toolbar(props: Props) {
 
       <IconButton
         title="撤销 ⌘Z"
+        tip={fixedTip("撤销", "⌘Z")}
         svg={ICONS.undo}
         disabled={!props.canUndo}
         onClick={props.onUndo}
@@ -239,6 +289,7 @@ export function Toolbar(props: Props) {
         <IconButton
           key={a.id}
           title={a.key ? `${a.label} ${a.key}` : a.label}
+          tip={fixedTip(a.label, a.key)}
           svg={ICONS[a.id]}
           disabled={props.busy}
           onClick={() => props.onAction(a.id)}
@@ -251,6 +302,7 @@ export function Toolbar(props: Props) {
         <IconButton
           key={a.id}
           title={a.key ? `${a.label} ${a.key}` : a.label}
+          tip={fixedTip(a.label, a.key)}
           svg={ICONS[a.id]}
           disabled={props.busy}
           onClick={() => props.onAction(a.id)}
@@ -261,6 +313,7 @@ export function Toolbar(props: Props) {
 
       <IconButton
         title="取消 esc"
+        tip={fixedTip("取消", "esc")}
         svg={ICONS.cancel}
         onClick={() => props.onAction("cancel")}
       />
@@ -423,7 +476,7 @@ function ToolPanel({
             onChange={(v) => onStyle({ highlightOpacity: v })}
           />
           <Slider
-            label="模糊"
+            label="背景模糊"
             min={1}
             max={10}
             step={1}
@@ -706,12 +759,16 @@ function dashIdOf(dash: number[]): string {
 
 function IconButton({
   title,
+  tip,
   svg,
   active,
   disabled,
   onClick,
 }: {
   title: string;
+  /** Rich hover tip above the button; `title` stays as the a11y label only
+   * (a native title attribute would double the tooltip). */
+  tip?: ReactNode;
   svg: string;
   active?: boolean;
   disabled?: boolean;
@@ -719,16 +776,15 @@ function IconButton({
 }) {
   const cls = ["cap-icon", active ? "active" : ""].filter(Boolean).join(" ");
   return (
-    <button
-      className={cls}
-      title={title}
-      aria-label={title}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={onClick}
-      // Icons are static in-repo SVG strings; no user input reaches this.
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <button className={cls} aria-label={title} aria-pressed={active} disabled={disabled} onClick={onClick}>
+      {/* Icons are static in-repo SVG strings; no user input reaches this. */}
+      <span dangerouslySetInnerHTML={{ __html: svg }} />
+      {tip && (
+        <span className="cap-tip" role="tooltip">
+          {tip}
+        </span>
+      )}
+    </button>
   );
 }
 

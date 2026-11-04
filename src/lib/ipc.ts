@@ -262,7 +262,7 @@ export const api = {
   /**
    * Probe a base URL + model with an optional not-yet-saved key.
    *
-   * `apiKey: null` means "use the key already in the keychain", which is what
+   * `apiKey: null` means "use the stored key", which is what
    * lets the test button work without forcing the user to save first.
    */
   testConnection: (baseUrl: string, model: string, apiKey: string | null) =>

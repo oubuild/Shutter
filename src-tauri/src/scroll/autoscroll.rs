@@ -3,9 +3,17 @@
 //! Same CoreGraphics calls the reference app makes:
 //! * `CGEventCreateScrollWheelEvent2` + `CGEventPost` for auto-scroll
 //!   (reference `screen::auto_scroll` / `spawn_auto_scroll_worker`);
-//! * `CGEventTapCreate` ListenOnly for intercepting the user's real wheel
+//! * `CGEventTapCreate` for intercepting the user's real wheel
 //!   (reference `screen::start_scroll_listener_macos`) — manual scrolling
 //!   pauses the session instead of fighting the injector.
+//!
+//! Both ride on ONE permission: Accessibility. Since macOS Catalina a
+//! ListenOnly tap is gated by the separate Input Monitoring TCC service
+//! (which would prompt for a second permission), while an Active/Default
+//! tap is gated by Accessibility — the same grant the injector needs. The
+//! reference keeps listening and injection under Accessibility this way
+//! (report §1.4); the callback never modifies events, so Active here is
+//! functionally listen-only.
 
 /// Result of trying to arm the auto-scroller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,27 +116,29 @@ pub mod imp {
     }
 
     impl ScrollListener {
-        /// Start a ListenOnly tap on ScrollWheel events.
-        ///
-        /// Injected events (posted within a few ms by us) are ignored; only
-        /// genuine user wheel motion accumulates. Returns `None` when the tap
-        /// cannot be created (degrades to no manual-pause detection).
-        pub fn start() -> Option<Self> {
-            let shared = Arc::new(ListenerShared::default());
+    /// Start an Active tap on ScrollWheel events.
+    ///
+    /// Injected events (posted within a few ms by us) are ignored; only
+    /// genuine user wheel motion accumulates. Returns `None` when the tap
+    /// cannot be created (no Accessibility grant — degrades to no
+    /// manual-pause detection; see the module comment for why Active and
+    /// not ListenOnly).
+    pub fn start() -> Option<Self> {
+        let shared = Arc::new(ListenerShared::default());
 
-            // CGEventTap::new_unchecked is unsafe for a reason: the callback
-            // must live as long as the tap. Leak one Arc for 'static and keep
-            // another in this handle so Drop can flip the stop flag.
-            let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared).into());
-            let thread = std::thread::Builder::new()
-                .name("scroll-listener".into())
-                .spawn(move || {
-                    let tap = unsafe {
-                        CGEventTap::new_unchecked(
-                            CGEventTapLocation::Session,
-                            CGEventTapPlacement::HeadInsertEventTap,
-                            CGEventTapOptions::ListenOnly,
-                            vec![CGEventType::ScrollWheel],
+        // CGEventTap::new_unchecked is unsafe for a reason: the callback
+        // must live as long as the tap. Leak one Arc for 'static and keep
+        // another in this handle so Drop can flip the stop flag.
+        let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared).into());
+        let thread = std::thread::Builder::new()
+            .name("scroll-listener".into())
+            .spawn(move || {
+                let tap = unsafe {
+                    CGEventTap::new_unchecked(
+                        CGEventTapLocation::Session,
+                        CGEventTapPlacement::HeadInsertEventTap,
+                        CGEventTapOptions::Default,
+                        vec![CGEventType::ScrollWheel],
                             |_proxy, _etype, event: &CGEvent| {
                                 // Our own injections arrive within a few ms of
                                 // the post; treat those as noise.

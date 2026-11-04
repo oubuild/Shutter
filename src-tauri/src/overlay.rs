@@ -11,17 +11,34 @@
 //!   own screenshot, so capture happens first and windows are built after.
 
 use anyhow::Result;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewWindow};
+
+/// The tool the overlay should auto-start once the user frames a selection.
+/// Set by the tray's 长截图 entry before `commands::start_capture`, consumed
+/// by it when the overlay windows are built.
+static BOOT_TOOL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn request_boot_tool(tool: &str) {
+    *BOOT_TOOL.lock().unwrap() = Some(tool.to_string());
+}
+
+/// Read-and-clear: one boot request must never leak into a later session.
+pub fn take_boot_tool() -> String {
+    BOOT_TOOL.lock().unwrap().take().unwrap_or_default()
+}
 
 /// URL for an overlay window; `CAP_PHOTO_DEBUG_BOX` preselects a region so the
 /// toolbar can be driven without a mouse during automation.
-fn overlay_url(monitor_id: u32) -> String {
-    let debug = std::env::var("CAP_PHOTO_DEBUG_BOX").is_ok();
-    if debug {
-        format!("index.html?view=overlay&monitor={monitor_id}&debug=box")
-    } else {
-        format!("index.html?view=overlay&monitor={monitor_id}")
+fn overlay_url(monitor_id: u32, boot: &str) -> String {
+    let mut url = format!("index.html?view=overlay&monitor={monitor_id}");
+    if !boot.is_empty() {
+        url.push_str(&format!("&boot={boot}"));
     }
+    if std::env::var("CAP_PHOTO_DEBUG_BOX").is_ok() {
+        url.push_str("&debug=box");
+    }
+    url
 }
 
 pub fn label_for(monitor_id: u32) -> String {
@@ -36,6 +53,7 @@ pub fn create(
     y: i32,
     width: u32,
     height: u32,
+    boot: &str,
 ) -> Result<WebviewWindow> {
     let label = label_for(monitor_id);
     if let Some(old) = app.get_webview_window(&label) {
@@ -46,7 +64,7 @@ pub fn create(
     let win = crate::windows::layer_window(
         app,
         &label,
-        &overlay_url(monitor_id),
+        &overlay_url(monitor_id, boot),
         "Shutter",
         x as f64,
         y as f64,
@@ -64,6 +82,19 @@ pub fn reveal(win: &WebviewWindow) -> Result<()> {
     let label = win.label().to_string();
     win.set_always_on_top(true)
         .map_err(|e| anyhow::anyhow!("always-on-top {label}: {e}"))?;
+    // set_always_on_top resets the level to floating (below the Dock);
+    // re-raise so the toolbar is never covered by the Dock or menu bar.
+    crate::windows::raise_above_dock(win);
+    // focus_when_ready below keeps calling show/set_focus while the webview
+    // boots; if any of that re-asserts the floating level, re-raise once the
+    // dust has settled.
+    {
+        let later = win.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            crate::windows::raise_above_dock(&later);
+        });
+    }
     let _ = win.set_focus();
 
     // A transparent borderless window can be attached to the window server with

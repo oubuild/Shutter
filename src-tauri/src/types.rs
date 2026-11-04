@@ -190,6 +190,12 @@ pub struct Settings {
     /// this field existed loading instead of falling back to all-defaults.
     #[serde(default = "default_ocr_provider")]
     pub ocr_provider: String,
+    /// API key for the vision model, stored beside the rest of the settings
+    /// (same `settings.json`, same directory) instead of the OS credential
+    /// store — the macOS Keychain proved unreliable for this app. Plain file
+    /// storage, exactly like every other persisted value.
+    #[serde(default)]
+    pub api_key: String,
 }
 
 fn default_true() -> bool {
@@ -221,6 +227,7 @@ impl Default for Settings {
             capture_shortcut: default_capture_shortcut(),
             update_source: default_update_source(),
             ocr_provider: default_ocr_provider(),
+            api_key: String::new(),
         }
     }
 }

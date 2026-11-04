@@ -78,7 +78,11 @@ export type ShapeMosaic = Base & {
   mode: MosaicMode;
 };
 
-/** Frosted-glass wash; `opacity` is the wash strength and `blur` its radius. */
+/** Spotlight hole: the marked region stays crisp while the shared highlight
+ * wash (a pure backdrop blur over the whole selection — no colour, see
+ * `HighlightCover`) softens the rest. `shape` is the hole silhouette; the
+ * wash's `opacity` (strength) and `blur` come from the live tool style, like
+ * the reference's single shared backdrop. */
 export type ShapeHighlight = Base & {
   kind: "highlight";
   from: Point;

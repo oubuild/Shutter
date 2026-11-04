@@ -23,7 +23,7 @@ pub fn layer_window(
     h: f64,
     focused: bool,
 ) -> Result<WebviewWindow> {
-    Ok(WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+    let win = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title(title)
         .position(x, y)
         .inner_size(w, h)
@@ -40,8 +40,53 @@ pub fn layer_window(
         .accept_first_mouse(true)
         .focused(focused)
         .visible(true)
-        .build()?)
+        .build()?;
+    raise_above_dock(&win);
+    Ok(win)
 }
+
+/// Raise a window above the macOS Dock and menu bar.
+///
+/// Tauri's `always_on_top` tops out at `NSFloatingWindowLevel` (3), which
+/// sits UNDER the Dock's composite level — a toolbar or control bar parked
+/// near a screen edge is drawn behind the Dock. `kCGPopUpMenuWindowLevel`
+/// (101) is far above every system chrome short of the screen saver, which
+/// is where capture overlays belong.
+///
+/// The `setLevel:` call is a raw `msg_send` dispatched to the main thread:
+/// layer windows are built from command/hotkey threads, and AppKit property
+/// access off the main thread crashes the process (Tauri's own window APIs
+/// marshal internally; this must do the same).
+#[cfg(target_os = "macos")]
+pub(crate) fn raise_above_dock(win: &WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let target = win.clone();
+    let res = win.app_handle().run_on_main_thread(move || {
+        let Ok(ns) = target.ns_window() else {
+            return;
+        };
+        let w = ns as *mut AnyObject;
+        if w.is_null() {
+            return;
+        }
+        let w: &AnyObject = unsafe { &*w };
+        // kCGPopUpMenuWindowLevel: above the Dock, the menu bar and any
+        // status items; only the screen-saver shield is higher.
+        let level: isize = 101;
+        let _: () = unsafe { msg_send![w, setLevel: level] };
+        // Read back: if anything else re-asserts a level, this line is what
+        // makes it visible in the log.
+        let now: isize = unsafe { msg_send![w, level] };
+        log::info!("window {} level -> {now}", target.label());
+    });
+    if let Err(e) = res {
+        log::warn!("raise above dock for {}: {e}", win.label());
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn raise_above_dock(_win: &WebviewWindow) {}
 
 pub fn open(app: &AppHandle, label: &str, view: &str, title: &str, w: f64, h: f64) -> Result<WebviewWindow> {
     if let Some(win) = app.get_webview_window(label) {
@@ -293,21 +338,29 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
 
 /// Menu-bar menu. Rebuilt (not mutated) whenever the capture hotkey changes so
 /// the displayed accelerator cannot go stale.
+///
+/// Item set mirrors the reference tray (截图/录屏/长截图/设置/关于/退出);
+/// 录屏 is not implemented in Shutter, and the gallery/shortcuts entries are
+/// Shutter's own extras.
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let accel = format_accelerator(&crate::settings::load_settings().capture_shortcut);
     let capture = MenuItem::with_id(app, "capture", format!("截图  {accel}"), true, None::<&str>)?;
+    let longshot = MenuItem::with_id(app, "longshot", "长截图", true, None::<&str>)?;
     let gallery = MenuItem::with_id(app, "gallery", "打开 Shutter", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let shortcuts = MenuItem::with_id(app, "shortcuts", "快捷键…", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "关于 Shutter", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Shutter", true, None::<&str>)?;
     Menu::with_items(
         app,
         &[
             &capture,
+            &longshot,
             &PredefinedMenuItem::separator(app)?,
             &gallery,
             &settings,
             &shortcuts,
+            &about,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -468,6 +521,17 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                 });
             }
+            "longshot" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Boots the overlay with ?boot=scroll: the scroll session
+                    // starts once the user frames a selection.
+                    crate::overlay::request_boot_tool("scroll");
+                    if let Err(e) = crate::commands::start_capture(&app).await {
+                        log::error!("long screenshot from tray failed: {e:#}");
+                    }
+                });
+            }
             "gallery" => {
                 let _ = open_main(app, "gallery");
             }
@@ -476,6 +540,9 @@ pub fn set_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "shortcuts" => {
                 let _ = open_settings_page(app, "shortcut", None);
+            }
+            "about" => {
+                let _ = open_about(app);
             }
             "quit" => app.exit(0),
             _ => {}

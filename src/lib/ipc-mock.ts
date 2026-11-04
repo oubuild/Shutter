@@ -16,8 +16,14 @@
  * Browsers cannot read the screen, but the mosaic/blur tools still need a real
  * image to sample. Gradients plus hard edges make a wrong block size or an
  * offset mask obvious at a glance, which flat grey would hide.
+ *
+ * `?frame=<same-origin url>` replaces the synthetic frame — used to stage
+ * showcase screenshots over a nicer backdrop (the marketing site, a real
+ * page) without touching the test-oriented default.
  */
 function mockFrameUrl(): string {
+  const override = new URLSearchParams(window.location.search).get("frame");
+  if (override) return override;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900">
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -500,7 +506,7 @@ function installIpcMock() {
           case "plugin:app|version":
             // About page reads the bundle version; keep the mock in sync
             // with package.json (what bumpp bumps).
-            resolve("0.1.1");
+            resolve("0.7.2");
             break;
           case "plugin:event|listen": {
             const event = String(args.event ?? "");

@@ -1,11 +1,11 @@
-//! Persisted user settings (non-secret) and the DeepSeek API key in Keychain.
+//! Persisted user settings and the vision-model API key — everything in one
+//! `settings.json` under the app data directory. The key used to live in the
+//! OS credential store (macOS Keychain), which proved unreliable; it now
+//! persists beside every other setting, on every platform.
 
 use crate::types::Settings;
 use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
-
-const KEYCHAIN_SERVICE: &str = "dev.oubuild.shutter";
-const KEYCHAIN_ACCOUNT: &str = "deepseek-api-key";
 
 /// Where the app keeps its own files.
 pub fn app_dir() -> Result<PathBuf> {
@@ -70,48 +70,42 @@ pub fn save_dir_path(settings: &Settings) -> Result<PathBuf> {
     }
 }
 
-fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| anyhow!("open keychain entry: {e}"))
-}
-
 pub fn save_api_key(key: &str) -> Result<()> {
     let key = key.trim();
     if key.is_empty() {
         return delete_api_key();
     }
-    entry()?
-        .set_password(key)
-        .map_err(|e| anyhow!("store API key in keychain: {e}"))
+    let mut settings = load_settings();
+    settings.api_key = key.to_string();
+    save_settings(&settings)
 }
 
 pub fn load_api_key() -> Result<String> {
-    match entry()?.get_password() {
-        Ok(key) if !key.trim().is_empty() => Ok(key),
-        Ok(_) => Err(anyhow!("API key is empty")),
-        Err(keyring::Error::NoEntry) => Err(anyhow!(
-            "尚未设置 API Key，请到设置页填写"
-        )),
-        Err(e) => Err(anyhow!("read API key from keychain: {e}")),
+    let key = load_settings().api_key;
+    if key.trim().is_empty() {
+        return Err(anyhow!("尚未设置 API Key，请到设置页填写"));
     }
+    Ok(key)
 }
 
 pub fn delete_api_key() -> Result<()> {
-    match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(anyhow!("delete API key: {e}")),
+    let mut settings = load_settings();
+    if settings.api_key.is_empty() {
+        return Ok(());
     }
+    settings.api_key = String::new();
+    save_settings(&settings)
 }
 
 pub fn has_api_key() -> bool {
-    load_api_key().is_ok()
+    !load_settings().api_key.trim().is_empty()
 }
 
 /// The key to use for a request that may carry an unsaved one.
 ///
 /// The settings page needs to test a key the user has typed but not yet
-/// committed to the keychain; everywhere else passes `None` and gets the stored
-/// key. The value never travels back to the webview either way.
+/// committed; everywhere else passes `None` and gets the stored key. The value
+/// never travels back to the webview either way.
 pub fn resolve_api_key(pending: Option<&str>) -> Result<String> {
     match pending.map(str::trim).filter(|k| !k.is_empty()) {
         Some(key) => Ok(key.to_string()),

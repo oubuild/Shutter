@@ -46,7 +46,7 @@ export function AboutMeta() {
           <div className="flex items-center justify-between gap-3 border-t border-mute py-1.5">
             <span className="w-20 flex-none color-muted">API 密钥</span>
             <span className="min-w-0 flex-1 px-2 text-success-700 dark:text-success-400">
-              保存在 macOS 钥匙串，不写入配置文件
+              保存在应用数据目录的 settings.json
             </span>
           </div>
         </div>

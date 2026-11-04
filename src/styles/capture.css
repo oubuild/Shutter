@@ -260,6 +260,20 @@ textarea {
   z-index: 4;
 }
 
+/* Corner handles of a selected annotation, sitting on its dashed outline.
+   Same chrome as the crop box's handles; the diagonal resize cursors come
+   from the stage's hover logic (these are pointer-events:none visuals —
+   hit testing is hitShapeCorner in the mousedown/mousemove handlers). */
+.shape-handle.h-nw,
+.shape-handle.h-se {
+  cursor: nwse-resize;
+}
+
+.shape-handle.h-ne,
+.shape-handle.h-sw {
+  cursor: nesw-resize;
+}
+
 .overlay-size {
   position: absolute;
   padding: 3px 7px;
@@ -385,6 +399,7 @@ textarea {
 
 /* 36x36 targets with 20px glyphs, matching the reference bar metrics. */
 .cap-icon {
+  position: relative;
   width: 36px;
   height: 36px;
   padding: 0;
@@ -406,6 +421,54 @@ textarea {
 .cap-icon.active {
   background: var(--bar-active);
   color: var(--bar-accent);
+}
+
+/* Hover tip above each button, mirroring the reference antd Tooltip
+   (placement top, offset -8, no arrow, 12px/28px, radius 6; dark-theme body
+   values — the bar chrome is dark regardless of system appearance). */
+.cap-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  height: 28px;
+  padding: 4px 8px;
+  box-sizing: border-box;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #fff;
+  background: #282d32;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 20;
+}
+
+.cap-icon:hover:not(:disabled) .cap-tip {
+  opacity: 1;
+}
+
+.cap-tip-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.cap-tip-sep {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.cap-tip-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .cap-sep {

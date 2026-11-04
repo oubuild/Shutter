@@ -97,8 +97,10 @@ pub async fn start_capture(app: &AppHandle) -> Result<CaptureSession> {
     log::info!("capture: encode+publish {:?}", encoded.elapsed());
     crate::session::Store::prune_frames(&frame_dir, &session.id);
 
+    // A boot tool (tray 长截图) applies to this session's overlays only.
+    let boot = overlay::take_boot_tool();
     for info in &monitors {
-        let win = overlay::create(app, info.id, info.x, info.y, info.width, info.height)?;
+        let win = overlay::create(app, info.id, info.x, info.y, info.width, info.height, &boot)?;
         overlay::reveal(&win)?;
     }
 
