@@ -73,6 +73,12 @@ pub mod imp {
     /// Post one scroll-wheel step of `lines` lines at the current pointer
     /// location (reference: `CGEventCreateScrollWheelEvent2` + `CGEventPost`).
     /// Returns false when event creation failed (`创建滚动事件失败`).
+    ///
+    /// `lines` is positive for scrolling DOWN (revealing content below), the
+    /// direction the stitcher expects (positive offset). macOS's `wheel1` sign
+    /// is the opposite — a positive `wheel1` scrolls UP — so the sign is
+    /// negated here; without it the page scrolls backwards and the pipeline
+    /// sees a negative offset it rejects as 方向反转.
     pub fn post_scroll(lines: i32) -> bool {
         let Ok(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else {
             log::warn!("[长截图] 创建事件源失败");
@@ -82,7 +88,7 @@ pub mod imp {
             source,
             ScrollEventUnit::LINE,
             1,
-            lines,
+            -lines,
             0,
             0,
         ) else {

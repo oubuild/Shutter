@@ -38,6 +38,8 @@ use crate::scroll::types::{
 };
 
 /// Lines per injected wheel step (reference: 每次固定行数, with a watchdog).
+/// Positive = scroll down — the stitcher's forward direction (positive offset).
+/// `autoscroll::post_scroll` negates it for macOS's `wheel1` sign convention.
 const SCROLL_LINES: i32 = 3;
 
 /// Pause between injected steps: enough for a page to settle.
