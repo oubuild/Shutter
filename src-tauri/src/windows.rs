@@ -263,7 +263,7 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
         None => "chat".to_string(),
     };
     log::info!("open_chat: crop={crop_id:?} action={action:?}");
-    let win = open(app, "chat", &view, "Shutter AI", 680.0, 720.0).map_err(|e| {
+    let win = open(app, "chat", &view, "Shutter AI", 900.0, 640.0).map_err(|e| {
         log::error!("open_chat failed: {e:#}");
         e
     })?;

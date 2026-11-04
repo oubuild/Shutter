@@ -12,16 +12,13 @@ import { Confirm } from "../components/Confirm";
 import {
   IconAlert,
   IconCheck,
+  IconChevronDown,
   IconEye,
   IconEyeOff,
-  IconImage,
-  IconKey,
-  IconKeyboard,
-  IconOverlay,
   IconRefresh,
-  IconSparkles,
 } from "../components/Icons";
 import { ShortcutRecorder } from "../components/ShortcutRecorder";
+import { Toggle } from "../components/Toggle";
 
 /**
  * Settings area of the main window, split across three nav tabs — AI 服务,
@@ -56,23 +53,22 @@ type Verification = {
   report: ConnectionReport;
 };
 
-/** `https://api.deepseek.com` → `api.deepseek.com`; unparsable input as-is. */
-function hostOf(baseUrl: string): string {
-  const raw = baseUrl.trim();
-  if (raw === "") return "未配置端点";
-  try {
-    return new URL(raw).host;
-  } catch {
-    return raw;
-  }
-}
-
-/** How the probe answered, in the vocabulary the footer readout uses. */
-function viaLabel(via: ConnectionReport["via"]): string | null {
-  if (via === "models") return "via /models";
-  if (via === "probe") return "via chat";
-  return null;
-}
+/** 翻译目标语言 preset list. The stored value is the string itself — the Rust
+ *  side passes it verbatim into the prompt, so adding a language is a list
+ *  edit, nothing else. */
+const TRANSLATE_LANGUAGES: readonly string[] = [
+  "简体中文",
+  "繁體中文",
+  "English",
+  "日本語",
+  "한국어",
+  "Français",
+  "Deutsch",
+  "Español",
+  "Русский",
+  "Português",
+  "Italiano",
+];
 
 /** Which nav tab is showing: decides the cards rendered and the dirty scope. */
 export type SettingsSection = "ai" | "general" | "shortcuts";
@@ -472,59 +468,30 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="settings-pane">
       {!headerless && (
-        <header className="flex-none px-5 pt-5 pb-4">
-          <h1 className="m-0 text-xl font-600 tracking-tight color-base">
+        <header className="flex-none px-6 pb-2 pt-5">
+          <h1 className="m-0 text-[15px] font-600 tracking-tight color-base">
             {SECTION_TITLES[section]}
           </h1>
-          <p className="mt-1 mb-0 text-compact color-faint">
-            改动在点击「保存」后生效
-          </p>
+          <p className="mt-0.5 mb-0 text-mini color-faint">改动在点击「保存」后生效</p>
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto px-5 pb-6">
-        <div className="flex max-w-[820px] flex-col gap-4">
+      <div className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="flex flex-col gap-6">
           {form === null ? (
-            <div className="app-card" data-testid="pref-card">
-              <div className="px-4 py-6 text-compact color-faint">
-                {error ?? "加载中…"}
-              </div>
-            </div>
+            <div className="text-compact color-faint">{error ?? "加载中…"}</div>
           ) : (
             <>
               {section === "ai" && (
                 <>
-                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-ai-title">
-                    <div className="app-card-head">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                        <IconSparkles size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="pref-ai-title" className="m-0 text-compact font-600 color-base">
-                          AI 服务
-                        </h2>
-                        <p className="m-0 mt-0.5 text-mini color-faint">
-                          端点、模型与连接测试
-                        </p>
-                      </div>
-                      <div className="ml-auto flex min-w-0 max-w-[52%] items-center justify-end gap-2">
-                        {verified && (
-                          <span className="badge badge-color-green" title="当前配置已通过连接测试">
-                            <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
-                            已验证
-                          </span>
-                        )}
-                        <span className="app-meta" title={form.baseUrl}>
-                          {hostOf(form.baseUrl)}
-                        </span>
-                      </div>
-                    </div>
+                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="端点配置">
+                    <div className="pref-group-title">端点配置</div>
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="preset">
-                        快速选择
+                    <div className="pref-row-top">
+                      <label className="pref-label-pt" htmlFor="preset">
+                        服务商预设
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
+                      <div className="pref-control flex flex-col gap-1.5">
                         <div className="relative">
                           <select
                             id="preset"
@@ -543,7 +510,7 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                             ))}
                           </select>
                           <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 color-faint">
-                            ▾
+                            <IconChevronDown size={13} />
                           </span>
                         </div>
                         <p className="app-hint">
@@ -554,14 +521,14 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                       </div>
                     </div>
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="base-url">
+                    <div className="pref-row-top">
+                      <label className="pref-label-pt" htmlFor="base-url">
                         服务地址
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
+                      <div className="pref-control flex flex-col gap-1.5">
                         <input
                           id="base-url"
-                          className="app-field"
+                          className="app-field font-mono text-mini"
                           type="text"
                           value={form.baseUrl}
                           placeholder="https://api.deepseek.com"
@@ -575,15 +542,15 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                       </div>
                     </div>
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="model">
+                    <div className="pref-row-top">
+                      <label className="pref-label-pt" htmlFor="model">
                         模型
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
+                      <div className="pref-control flex flex-col gap-1.5">
                         <div className="flex items-center gap-2">
                           <input
                             id="model"
-                            className="app-field flex-1"
+                            className="app-field flex-1 font-mono text-mini"
                             type="text"
                             list="model-options"
                             value={form.model}
@@ -599,7 +566,7 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                           </datalist>
                           <button
                             type="button"
-                            className="grid h-8 w-8 flex-none place-items-center rounded-md border border-neutral-300 color-muted transition hover:bg-hover disabled:op30"
+                            className="btn-action h-8 w-8 flex-none justify-center px-0"
                             title="从服务端获取模型列表"
                             aria-label="从服务端获取模型列表"
                             disabled={modelBusy}
@@ -618,25 +585,39 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                       </div>
                     </div>
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="translate-lang">
+                    <div className="pref-row">
+                      <label className="pref-label" htmlFor="translate-lang">
                         翻译目标语言
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
-                        <input
+                      <div className="pref-control relative">
+                        <select
                           id="translate-lang"
-                          className="app-field"
-                          type="text"
-                          value={form.translateLang}
-                          placeholder="简体中文"
-                          onChange={(e) => update("translateLang", e.target.value)}
-                        />
+                          className="app-field cursor-pointer appearance-none pr-8"
+                          value={TRANSLATE_LANGUAGES.includes(form.translateLang) ? form.translateLang : "custom"}
+                          onChange={(e) => {
+                            if (e.target.value !== "custom") update("translateLang", e.target.value);
+                          }}
+                        >
+                          {TRANSLATE_LANGUAGES.map((lang) => (
+                            <option key={lang} value={lang}>
+                              {lang}
+                            </option>
+                          ))}
+                          {/* A hand-edited settings.json can hold anything; keep
+                              it selectable instead of silently reverting. */}
+                          {!TRANSLATE_LANGUAGES.includes(form.translateLang) && (
+                            <option value="custom">{form.translateLang}（自定义）</option>
+                          )}
+                        </select>
+                        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 color-faint">
+                          <IconChevronDown size={13} />
+                        </span>
                       </div>
                     </div>
 
-                    <div className="app-row">
-                      <span className="app-label">连接测试</span>
-                      <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                    <div className="pref-row pt-1">
+                      <span className="pref-label">连接测试</span>
+                      <div className="pref-control flex flex-wrap items-center gap-2.5">
                         <button
                           type="button"
                           className="btn-action"
@@ -677,53 +658,31 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                           </>
                         )}
 
-                        {showReport && viaLabel(report.via) && (
-                          <span className="rounded bg-sunken px-1.5 py-0.5 font-mono text-mini color-faint">
-                            {viaLabel(report.via)}
+                        {verified && !showReport && (
+                          <span className="badge badge-color-green" title="当前配置已通过连接测试">
+                            <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
+                            已验证
                           </span>
                         )}
                       </div>
                     </div>
                   </section>
 
-                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-key-title">
-                    <div className="app-card-head">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                        <IconKey size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="pref-key-title" className="m-0 text-compact font-600 color-base">
-                          访问凭据
-                        </h2>
-                        <p className="m-0 mt-0.5 text-mini color-faint">
-                          存储在系统钥匙串，不写入配置文件
-                        </p>
-                      </div>
-                      <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          className={`badge border-0 ${
-                            keyStatus ? "badge-color-green" : "badge-color-red"
-                          }`}
-                          title={keyStatus ? "已保存在系统钥匙串" : "点击填写 API Key"}
-                          onClick={() => keyRef.current?.focus()}
-                        >
-                          <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
-                          {keyStatus ? "已保存" : "未设置"}
-                        </button>
-                      </div>
-                    </div>
+                  <div className="pref-divider" />
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="api-key">
-                        API Key
+                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="身份凭据">
+                    <div className="pref-group-title">身份凭据</div>
+
+                    <div className="pref-row-top">
+                      <label className="pref-label-pt" htmlFor="api-key">
+                        API 密钥
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
+                      <div className="pref-control flex flex-col gap-1.5">
                         <div className="relative">
                           <input
                             id="api-key"
                             ref={keyRef}
-                            className="app-field pr-9"
+                            className="app-field pr-9 font-mono text-mini tracking-wider"
                             type={keyVisible ? "text" : "password"}
                             value={keyInput}
                             placeholder={keyStatus ? "已保存，留空则不修改" : "sk-..."}
@@ -742,22 +701,32 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                             {keyVisible ? <IconEyeOff size={15} /> : <IconEye size={15} />}
                           </button>
                         </div>
-                        <p className="app-hint">
-                          点「保存」时才会写入钥匙串；留空表示沿用已保存的密钥。
-                          {keyStatus && (
-                            <>
-                              {" "}
-                              <button
-                                type="button"
-                                className="border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2 disabled:op30"
-                                disabled={keyBusy}
-                                onClick={() => void clearKey()}
-                              >
-                                清除已保存的密钥
-                              </button>
-                            </>
-                          )}
-                        </p>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span
+                            className={`badge border-0 ${
+                              keyStatus ? "badge-color-green" : "badge-color-red"
+                            }`}
+                          >
+                            <span className="h-1.5 w-1.5 flex-none rounded-full bg-current" />
+                            {keyStatus ? "已在钥匙串" : "未设置"}
+                          </span>
+                          <p className="app-hint inline">
+                            点「保存」时才会写入钥匙串；留空表示沿用已保存的密钥。
+                            {keyStatus && (
+                              <>
+                                {" "}
+                                <button
+                                  type="button"
+                                  className="border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2 disabled:op30"
+                                  disabled={keyBusy}
+                                  onClick={() => void clearKey()}
+                                >
+                                  清除已保存的密钥
+                                </button>
+                              </>
+                            )}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </section>
@@ -765,35 +734,18 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
               )}
               {section === "general" && (
                 <>
-                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-capture-title">
-                    <div className="app-card-head">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                        <IconImage size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="pref-capture-title" className="m-0 text-compact font-600 color-base">
-                          截图与保存
-                        </h2>
-                        <p className="m-0 mt-0.5 text-mini color-faint">
-                          截图完成后的去向
-                        </p>
-                      </div>
-                      <div className="ml-auto flex min-w-0 items-center justify-end gap-2">
-                        <span className="app-meta" title={form.saveDir ?? ""}>
-                          {form.saveDir?.trim() ? form.saveDir : "~/Pictures/Shutter"}
-                        </span>
-                      </div>
-                    </div>
+                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="存储位置">
+                    <div className="pref-group-title">存储位置</div>
 
-                    <div className="app-row">
-                      <label className="app-label" htmlFor="save-dir">
+                    <div className="pref-row-top">
+                      <label className="pref-label-pt" htmlFor="save-dir">
                         保存目录
                       </label>
-                      <div className="flex min-w-0 flex-col gap-1.5">
-                        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+                      <div className="pref-control flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2">
                           <input
                             id="save-dir"
-                            className="app-field"
+                            className="app-field flex-1 font-mono text-mini"
                             type="text"
                             value={form.saveDir ?? ""}
                             placeholder="留空使用默认目录"
@@ -802,14 +754,14 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                           />
                           <button
                             type="button"
-                            className="btn-action h-8"
+                            className="btn-action h-8 flex-none"
                             onClick={() => void pickDirectory()}
                           >
                             选择…
                           </button>
                           <button
                             type="button"
-                            className="btn-action h-8"
+                            className="btn-action h-8 flex-none"
                             onClick={() => void openSaveDirectory()}
                           >
                             打开
@@ -818,45 +770,39 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                         <p className="app-hint">留空则使用默认目录 ~/Pictures/Shutter。</p>
                       </div>
                     </div>
+                  </section>
 
-                    <div className="app-row-toggle">
-                      <label className="block color-base" htmlFor="auto-save">
-                        <b className="text-compact font-500">自动保存到图库</b>
-                        <em className="mt-0.5 block text-mini not-italic color-faint">
+                  <div className="pref-divider" />
+
+                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="自动化与行为">
+                    <div className="pref-group-title pl-0">自动化与行为</div>
+
+                    <div className="flex items-center justify-between gap-6">
+                      <label className="block min-w-0 cursor-pointer" htmlFor="auto-save">
+                        <b className="block text-[13px] font-500 color-base">自动保存到图库</b>
+                        <em className="mt-0.5 block text-mini not-italic leading-relaxed color-faint">
                           关闭后只有按 ⌘S 保存的截图才会出现在图库
                         </em>
                       </label>
-                      <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
-                        <input
-                          id="auto-save"
-                          type="checkbox"
-                          className="peer sr-only"
-                          checked={form.autoSave}
-                          onChange={(e) => update("autoSave", e.target.checked)}
-                        />
-                        <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
-                        <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
-                      </label>
+                      <Toggle
+                        label="自动保存到图库"
+                        checked={form.autoSave}
+                        onChange={(next) => update("autoSave", next)}
+                      />
                     </div>
 
-                    <div className="app-row-toggle">
-                      <label className="block color-base" htmlFor="copy-after">
-                        <b className="text-compact font-500">自动复制到剪贴板</b>
-                        <em className="mt-0.5 block text-mini not-italic color-faint">
-                          截图确认后立即复制，可直接粘贴
+                    <div className="flex items-center justify-between gap-6 border-t border-mute pt-4">
+                      <label className="block min-w-0 cursor-pointer" htmlFor="copy-after">
+                        <b className="block text-[13px] font-500 color-base">自动复制到剪贴板</b>
+                        <em className="mt-0.5 block text-mini not-italic leading-relaxed color-faint">
+                          截图确认后立即复制，可直接 ⌘V 粘贴
                         </em>
                       </label>
-                      <label className="relative inline-flex h-5 w-9 flex-none cursor-pointer items-center">
-                        <input
-                          id="copy-after"
-                          type="checkbox"
-                          className="peer sr-only"
-                          checked={form.copyAfterCapture}
-                          onChange={(e) => update("copyAfterCapture", e.target.checked)}
-                        />
-                        <span className="absolute inset-0 rounded-full bg-#99999940 transition peer-checked:bg-primary-500 peer-focus-visible:ring-3 peer-focus-visible:ring-primary-500/30" />
-                        <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4" />
-                      </label>
+                      <Toggle
+                        label="自动复制到剪贴板"
+                        checked={form.copyAfterCapture}
+                        onChange={(next) => update("copyAfterCapture", next)}
+                      />
                     </div>
                   </section>
                 </>
@@ -864,62 +810,46 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
 
               {section === "shortcuts" && (
                 <>
-                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-hotkey-title">
-                    <div className="app-card-head">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                        <IconKeyboard size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="pref-hotkey-title" className="m-0 text-compact font-600 color-base">
-                          全局热键
-                        </h2>
-                        <p className="m-0 mt-0.5 text-mini color-faint">
-                          在任何应用中触发截图
-                        </p>
-                      </div>
-                    </div>
+                  <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="全局热键">
+                    <div className="pref-group-title pl-0">全局热键</div>
 
-                    <div className="app-row">
-                      <span className="app-label">开始截图</span>
-                      <div className="flex min-w-0 flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-6">
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-500 color-base">开始截图</div>
+                        <div className="mt-0.5 text-mini leading-relaxed color-faint">
+                          在任何应用程序前台时均可按下此热键触发选区截图
+                        </div>
+                      </div>
+                      <div className="flex flex-none items-center gap-2.5">
                         <ShortcutRecorder
                           value={form.captureShortcut}
                           disabled={saving}
                           onChange={(accel) => update("captureShortcut", accel)}
                           onRecordingChange={setRecordingShortcut}
                         />
-                        <p className="app-hint">
-                          全局生效；点按后按下新组合，保存时向系统重新注册。
-                          <button
-                            type="button"
-                            className="ml-1 border-0 bg-transparent p-0 text-mini color-primary-600 underline underline-offset-2"
-                            onClick={() =>
-                              update("captureShortcut", defaultCaptureShortcut)
-                            }
-                          >
-                            恢复默认 {formatAccelerator(defaultCaptureShortcut)}
-                          </button>
-                        </p>
+                        <button
+                          type="button"
+                          className="rounded px-1 py-1 text-mini color-faint transition-colors hover:color-primary-600"
+                          title={`恢复为默认 ${formatAccelerator(defaultCaptureShortcut)}`}
+                          onClick={() => update("captureShortcut", defaultCaptureShortcut)}
+                        >
+                          恢复默认
+                        </button>
                       </div>
                     </div>
+                    <p className="app-hint">
+                      点击热键框后按下新的快捷组合键；按 Esc 退出录制。保存时向系统重新注册。
+                    </p>
                   </section>
 
-                  <section className="app-card" data-testid="pref-card" aria-labelledby="pref-overlay-title">
-                    <div className="app-card-head">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-primary-500/10 color-primary-600">
-                        <IconOverlay size={15} />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="pref-overlay-title" className="m-0 text-compact font-600 color-base">
-                          截图浮层
-                        </h2>
-                        <p className="m-0 mt-0.5 text-mini color-faint">
-                          选区出现后可用的按键
-                        </p>
-                      </div>
-                    </div>
+                  <div className="pref-divider ml-0" />
 
-                    <div className="grid grid-cols-[repeat(auto-fit,minmax(164px,1fr))] gap-x-4 gap-y-2 border-t border-mute px-4 py-3">
+                  <section className="flex flex-col gap-3" data-testid="pref-card" aria-label="选区浮层操作">
+                    <div className="flex items-center justify-between">
+                      <div className="pref-group-title pl-0">选区浮层操作</div>
+                      <span className="text-mini color-faint">选区确认后生效</span>
+                    </div>
+                    <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-x-6 gap-y-1">
                       {[
                         ["Enter", "确认并复制"],
                         [IS_MAC ? "⌘S" : "Ctrl+S", "确认并保存"],
@@ -927,10 +857,13 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                         [IS_MAC ? "⌘Z" : "Ctrl+Z", "撤销标注"],
                         ["1 – 9", "切换工具"],
                       ].map(([k, label]) => (
-                        <span key={k} className="flex items-center gap-2 text-compact color-muted">
+                        <div
+                          key={k}
+                          className="flex items-center justify-between rounded-lg px-2.5 py-1.5 transition-colors hover:bg-hover"
+                        >
+                          <span className="text-mini color-muted">{label}</span>
                           <kbd className="app-kbd">{k}</kbd>
-                          {label}
-                        </span>
+                        </div>
                       ))}
                     </div>
                   </section>
@@ -941,19 +874,30 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
         </div>
       </div>
 
-      <footer className="flex flex-none items-center gap-3 border-t border-base bg-base px-5 py-3">
-        <span
-          className={`min-w-0 flex-1 truncate text-compact ${toneClass}`}
-          data-testid="save-state"
-        >
-          {footerState.tone === "dirty" && (
-            <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-primary-500 align-middle" />
-          )}
-          {footerState.text}
-        </span>
+      <footer className="flex flex-none items-center justify-between gap-3 border-t border-base bg-secondary px-6 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={`inline-block h-2 w-2 flex-none rounded-full ${
+              footerState.tone === "error"
+                ? "bg-error-500"
+                : footerState.tone === "saved"
+                  ? "bg-success-500"
+                  : footerState.tone === "dirty"
+                    ? "bg-primary-500 dark:bg-neutral-300"
+                    : "bg-neutral-400 dark:bg-neutral-500"
+            }`}
+            aria-hidden="true"
+          />
+          <span
+            className={`min-w-0 truncate text-mini ${toneClass}`}
+            data-testid="save-state"
+          >
+            {footerState.text}
+          </span>
+        </div>
         <button
           type="button"
-          className="btn-primary flex-none"
+          className="btn-primary flex-none px-5"
           disabled={disabled}
           title="保存设置（⌘S）"
           onClick={requestSave}

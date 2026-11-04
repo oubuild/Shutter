@@ -46,7 +46,7 @@ export function Confirm({
       role="presentation"
     >
       <div
-        className="w-[340px] rounded-xl border border-base bg-base p-4 shadow-2xl"
+        className="dialog-pop w-[340px] rounded-xl border border-base bg-base p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -54,7 +54,7 @@ export function Confirm({
       >
         <div className="mb-2 text-compact font-600 color-base">{title}</div>
         <div className="break-all text-mini leading-6 color-muted">{message}</div>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="mt-5 flex justify-end gap-2">
           <button type="button" className="btn-action" onClick={onCancel}>
             {cancelLabel}
           </button>

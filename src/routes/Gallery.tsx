@@ -11,7 +11,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText, type GalleryItem } from "../lib/ipc";
 import { Preview } from "../components/Preview";
 import { Confirm } from "../components/Confirm";
-import { IconFolder, IconRefresh } from "../components/Icons";
+import { IconFolder, IconImage, IconRefresh } from "../components/Icons";
 import { formatAccelerator } from "../lib/shortcut";
 
 type Props = {
@@ -290,14 +290,25 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
       </header>
 
       {error && (
-        <div className="mx-5 mb-3 rounded-md border border-error-500/25 bg-error-500/8 px-3 py-2 text-mini text-error-700">
+        <div className="mx-5 mb-3 rounded-lg border border-error-500/25 bg-error-500/8 px-3 py-2 text-mini text-error-700 dark:text-error-400">
           {error}
         </div>
       )}
 
       <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 pb-4">
+        {items === null && !error && (
+          /* First-load skeleton: one shimmer row per expected grid line. */
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="thumb-shimmer aspect-[4/3] rounded-lg border border-base" />
+            ))}
+          </div>
+        )}
         {items !== null && items.length === 0 && !error && (
           <div className="mx-auto my-16 max-w-[340px] text-center">
+            <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-raised color-faint">
+              <IconImage size={26} />
+            </div>
             <div className="mb-2 text-compact font-600 color-base">还没有截图</div>
             <div className="text-mini leading-7 color-faint">
               按 {captureAccel ? formatAccelerator(captureAccel) : "⌘⇧A"}{" "}
@@ -313,15 +324,16 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
 
         {groups.map((group) => (
           <section key={dayKey(group[0].createdAt)}>
-            <div className="sticky top-0 z-nav bg-secondary px-0 pb-2 pt-1 text-mini font-600 color-faint">
-              {dayLabel(group[0].createdAt)}
+            <div className="sticky top-0 z-nav flex items-baseline gap-2 bg-secondary pb-2 pt-1">
+              <span className="text-mini font-600 color-faint">{dayLabel(group[0].createdAt)}</span>
+              <span className="text-micro color-faint op-70">{group.length} 张</span>
             </div>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5">
               {group.map((item) => (
                 <button
                   key={item.path}
                   type="button"
-                  className="group relative block aspect-[4/3] overflow-hidden rounded-md border border-base bg-base p-0 text-left transition hover:border-primary-500"
+                  className="group relative block aspect-[4/3] overflow-hidden rounded-lg border border-base bg-base p-0 text-left shadow-none transition duration-150 hover:border-primary-500 hover:shadow-md"
                   title={`${item.name}\n${item.width}×${item.height} · ${sizeLabel(item.bytes)}`}
                   onClick={() => setPreview(item)}
                   onContextMenu={(e) => openMenu(e, item)}
@@ -334,9 +346,9 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
                       draggable={false}
                     />
                   ) : (
-                    <div className="h-full w-full animate-[thumb-shimmer_1.4s_ease-in-out_infinite] bg-[linear-gradient(110deg,#e9eaee_30%,#f5f6f8_50%,#e9eaee_70%)] bg-[length:200%_100%]" />
+                    <div className="thumb-shimmer h-full w-full" />
                   )}
-                  <span className="absolute bottom-1.5 right-1.5 rounded bg-black/55 px-1.5 py-px text-micro tabular-nums text-white op-0 transition group-hover:op-100">
+                  <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/60 px-1.5 py-px text-micro tabular-nums text-white op-0 transition duration-150 group-hover:op-100">
                     {timeLabel(item.createdAt)}
                   </span>
                 </button>
@@ -347,40 +359,46 @@ export function Gallery({ reloadKey = 0, active = true }: Props) {
       </div>
 
       {toast && (
-        <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-#111c px-3.5 py-1.5 text-mini text-white shadow-lg">
+        <div className="toast-in pointer-events-none absolute bottom-4 left-1/2 z-toast rounded-full border border-white/10 bg-[#26262a]/92 px-3.5 py-1.5 text-mini text-white shadow-lg backdrop-blur-md">
           {toast}
         </div>
       )}
 
       {menu && (
         <div
-          className="fixed z-dropdown flex min-w-[168px] flex-col rounded-md border border-base bg-base p-1 shadow-lg"
+          className="menu-pop fixed z-dropdown flex w-[184px] flex-col rounded-xl border border-line bg-surface p-1 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
           style={{ left: menu.x, top: menu.y }}
+          role="menu"
         >
           <button
             type="button"
-            className="rounded px-2.5 py-1.5 text-left text-compact color-base hover:bg-hover"
+            role="menuitem"
+            className="flex h-8 items-center rounded-md px-2.5 text-left text-[13px] color-ink transition-colors duration-100 hover:bg-surface-alt"
             onClick={() => setPreview(menu.item)}
           >
             预览
           </button>
           <button
             type="button"
-            className="rounded px-2.5 py-1.5 text-left text-compact color-base hover:bg-hover"
+            role="menuitem"
+            className="flex h-8 items-center rounded-md px-2.5 text-left text-[13px] color-ink transition-colors duration-100 hover:bg-surface-alt"
             onClick={() => void copyItem(menu.item)}
           >
             复制图片
           </button>
           <button
             type="button"
-            className="rounded px-2.5 py-1.5 text-left text-compact color-base hover:bg-hover"
+            role="menuitem"
+            className="flex h-8 items-center rounded-md px-2.5 text-left text-[13px] color-ink transition-colors duration-100 hover:bg-surface-alt"
             onClick={() => void reveal(menu.item)}
           >
             在文件夹中显示
           </button>
+          <div className="mx-1 my-1 border-t border-line" />
           <button
             type="button"
-            className="rounded px-2.5 py-1.5 text-left text-compact text-error-600 hover:bg-hover"
+            role="menuitem"
+            className="flex h-8 items-center rounded-md px-2.5 text-left text-[13px] text-error-600 transition-colors duration-100 hover:bg-rose-500/10 dark:text-error-400"
             onClick={() => setPendingDelete(menu.item)}
           >
             删除…

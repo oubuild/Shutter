@@ -66,14 +66,14 @@ export function ShortcutRecorder({
           setError(null);
           setRecording((v) => !v);
         }}
-        className={`inline-flex h-8 min-w-[132px] items-center justify-center rounded-md border px-3 text-compact transition disabled:op30 ${
+        className={`inline-flex h-8 min-w-[132px] items-center justify-center rounded-md border px-3.5 font-mono text-[13px] font-500 transition disabled:op30 ${
           recording
-            ? "border-primary-500 bg-primary-500/10 ring-3 ring-primary-500/20"
-            : "border-neutral-300 bg-base hover:bg-hover"
+            ? "border-primary-500 bg-primary-500 text-white ring-3 ring-primary-500/15 dark:border-neutral-200 dark:bg-neutral-200 dark:text-neutral-900"
+            : "border-dashed border-neutral-400 dark:border-neutral-600 bg-base text-compact tracking-wider color-base hover:border-neutral-500 dark:hover:border-neutral-500"
         }`}
       >
         {recording ? (
-          <span className="text-mini color-primary-600">按下组合键…</span>
+          <span className="text-mini font-400">按下组合键…</span>
         ) : (
           <kbd className="border-0 bg-transparent p-0 font-sans text-compact tracking-wider color-base">
             {formatAccelerator(value)}

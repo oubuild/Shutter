@@ -44,9 +44,9 @@ export default defineConfig({
       // the antfu vocabulary but restores the button affordance.
       overrides: {
         "btn-action":
-          "border border-neutral-300 dark:border-neutral-700 rounded flex gap-2 items-center px2.5 py1.5 color-base hover:bg-hover hover:border-neutral-400 dark:hover:border-neutral-600 transition disabled:pointer-events-none disabled:op40! outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
+          "border border-neutral-300 dark:border-neutral-700 rounded-md flex gap-2 items-center px2.5 py1.5 color-base bg-base hover:bg-hover hover:border-neutral-400 dark:hover:border-neutral-600 shadow-[0_1px_1px_rgba(0,0,0,0.05)] active:translate-y-[0.5px] active:shadow-[inset_0_1px_1px_rgba(0,0,0,0.08)] transition disabled:pointer-events-none disabled:op40! outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
         "btn-primary":
-          "px2.5 py1.5 rounded border border-transparent flex gap-2 items-center bg-primary-500 hover:bg-primary-600 dark:bg-neutral-200 dark:hover:bg-white dark:text-neutral-900 text-white font-500 transition disabled:op50 disabled:pointer-events-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
+          "px2.5 py1.5 rounded-md border border-transparent flex gap-2 items-center bg-primary-500 hover:bg-primary-600 dark:bg-neutral-200 dark:hover:bg-white dark:text-neutral-900 text-white font-500 shadow-[0_1px_2px_rgba(0,0,0,0.12)] active:translate-y-[0.5px] transition disabled:op50 disabled:pointer-events-none outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40",
       },
     }),
     presetWind3(),
@@ -103,6 +103,16 @@ input, textarea, select { font: inherit; color: inherit; }
 @keyframes thumb-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
 @keyframes menu-pop { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .menu-pop { animation: menu-pop 170ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes dialog-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+.dialog-pop { animation: dialog-pop 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.toast-in { animation: toast-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+.thumb-shimmer { background: linear-gradient(110deg, #e9eaee 30%, #f5f6f8 50%, #e9eaee 70%); background-size: 200% 100%; animation: thumb-shimmer 1.4s ease-in-out infinite; }
+.dark .thumb-shimmer { background: linear-gradient(110deg, #232327 30%, #2d2d32 50%, #232327 70%); background-size: 200% 100%; }
+.preview-stage { background-color: #F0F1F3; background-image: radial-gradient(rgba(0, 0, 0, 0.10) 1px, transparent 1px); background-size: 16px 16px; }
+.dark .preview-stage { background-color: #121316; background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px); background-size: 16px 16px; }
+.checkerboard { background-color: #f7f7f8; background-image: linear-gradient(45deg, #ececee 25%, transparent 25%), linear-gradient(-45deg, #ececee 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ececee 75%), linear-gradient(-45deg, transparent 75%, #ececee 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0px; }
+.dark .checkerboard { background-color: #1a1a1d; background-image: linear-gradient(45deg, #242428 25%, transparent 25%), linear-gradient(-45deg, #242428 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #242428 75%), linear-gradient(-45deg, transparent 75%, #242428 75%); }
 `,
     },
   ],
@@ -132,18 +142,30 @@ input, textarea, select { font: inherit; color: inherit; }
     "z-drawer-backdrop": "z-[80]",
     "z-drawer-content": "z-[90]",
 
-    // App-level composites reused across the settings pane.
-    "app-card": "bg-base border border-base rounded-lg overflow-hidden",
+    // App-level composites reused across the settings pane. The radius
+    // ladder: controls 6 (rounded-md), cards 12 (rounded-xl), popovers 24.
+    "app-card": "bg-base border border-base rounded-xl overflow-hidden",
     "app-card-head": "flex items-center gap-3 px-4 py-3 border-b border-mute",
     "app-row": "grid grid-cols-[168px_minmax(0,1fr)] gap-4 px-4 py-3 border-t border-mute",
     "app-row-toggle": "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-4 py-3 border-t border-mute",
     "app-label": "pt-1.5 text-compact color-muted",
     "app-field":
-      'w-full h-8 rounded border bg-base px-2.5 py-0 text-compact color-base outline-none transition focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 placeholder:color-faint',
+      'w-full h-8 rounded-md border border-neutral-300 dark:border-neutral-700 bg-base px-2.5 py-0 text-compact color-base outline-none transition shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.04)] hover:border-neutral-400 dark:hover:border-neutral-600 focus:border-primary-500 focus:shadow-none focus:ring-2 focus:ring-primary-500/20 placeholder:color-faint',
     "app-hint": "m-0 text-mini color-faint leading-relaxed",
     "app-meta": "font-mono tabular-nums text-mini color-faint truncate",
     "app-kbd":
-      "inline-flex items-center justify-center min-w-14 px-1.5 py-0.5 rounded border border-neutral-300 bg-sunken font-mono text-mini color-muted leading-none",
+      "inline-flex items-center justify-center min-w-7 px-1.5 py-0.5 rounded-[6px] border border-neutral-300 border-b-2 border-b-neutral-400 bg-gradient-to-b from-white to-neutral-100 font-mono text-mini font-500 color-base leading-none shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-neutral-700 dark:border-b-neutral-600 dark:from-neutral-700 dark:to-neutral-800 dark:color-neutral-200",
+
+    // macOS System-Settings flat form rows: right-aligned label column,
+    // controls to the right, uppercase group captions aligned over the
+    // control column, hairline dividers indented to match.
+    "pref-row": "flex items-center gap-0",
+    "pref-row-top": "flex items-start gap-0",
+    "pref-label": "w-[110px] flex-none pr-4 text-right text-[13px] font-500 color-muted",
+    "pref-label-pt": "pt-1.5 w-[110px] flex-none pr-4 text-right text-[13px] font-500 color-muted",
+    "pref-control": "min-w-0 flex-1 max-w-[420px]",
+    "pref-group-title": "pl-[126px] text-[11px] font-600 tracking-wider uppercase color-faint",
+    "pref-divider": "my-4 ml-[126px] border-t border-mute",
 
     // Shutter AI window (Chat.tsx): 32px toolbar controls, 36px primary CTAs
     // (ai-btn-primary), 8px control radius, 12px card radius, spec palette

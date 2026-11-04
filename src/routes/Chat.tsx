@@ -692,48 +692,48 @@ export function Chat() {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-surface text-[13px] color-ink">
-      {/* Row 1: action tabs (switch results, first click runs), then model/status ops */}
+      {/* Row 1: connection status (left) · task tabs (centre, segmented) · model + actions (right) */}
       <header className="flex flex-none items-center gap-2 border-b border-line px-4 py-2.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-          {ACTION_TABS.map(({ id, label }) => (
+        <nav className="flex min-w-0 flex-1 items-center justify-center overflow-x-auto">
+          <div className="inline-flex flex-none items-center gap-0.5 rounded-lg bg-sunken p-[3px]">
+            {ACTION_TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                className={
+                  tab === id
+                    ? "inline-flex h-6 flex-none items-center gap-1.5 whitespace-nowrap rounded-md bg-primary-500 px-3 text-mini font-500 text-white shadow-[0_1px_2px_rgba(0,0,0,0.15)] transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 dark:bg-neutral-200 dark:text-neutral-900 disabled:pointer-events-none disabled:op-45"
+                    : "inline-flex h-6 flex-none items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-mini font-500 color-ink-dim transition hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 disabled:pointer-events-none disabled:op-45"
+                }
+                disabled={cropId === ""}
+                onClick={() => selectTab(id)}
+              >
+                {label}
+                {acts[id].status === "streaming" && (
+                  <span
+                    className={`inline-block h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
+                      tab === id
+                        ? "bg-white dark:bg-neutral-900"
+                        : "bg-primary-500 dark:bg-neutral-300"
+                    }`}
+                  />
+                )}
+              </button>
+            ))}
             <button
-              key={id}
               className={
-                tab === id
-                  ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500 px-3 text-[13px] font-500 text-white transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 hover:bg-primary-600 disabled:pointer-events-none disabled:op-45"
-                  : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 disabled:pointer-events-none disabled:op-45"
+                tab === "chat"
+                  ? "inline-flex h-6 flex-none items-center gap-1.5 whitespace-nowrap rounded-md bg-primary-500 px-3 text-mini font-500 text-white shadow-[0_1px_2px_rgba(0,0,0,0.15)] transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35 dark:bg-neutral-200 dark:text-neutral-900"
+                  : "inline-flex h-6 flex-none items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-mini font-500 color-ink-dim transition hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
               }
-              disabled={cropId === ""}
-              onClick={() => selectTab(id)}
+              onClick={() => setTab("chat")}
             >
-              {label}
-              {acts[id].status === "streaming" && (
-                <span
-                  className={`inline-block h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
-                    tab === id ? "bg-white" : "bg-primary-500"
-                  }`}
-                />
+              对话
+              {activeId !== null && (
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary-500 motion-safe:animate-pulse dark:bg-neutral-300" />
               )}
             </button>
-          ))}
-          <button
-            className={
-              tab === "chat"
-                ? "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-500/10 px-3 text-[13px] font-500 color-primary-600 transition outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
-                : "inline-flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-[13px] font-500 color-ink-dim transition hover:bg-surface-alt hover:color-ink outline-none focus-visible:ring-2 focus-visible:ring-primary-500/35"
-            }
-            onClick={() => setTab("chat")}
-          >
-            对话
-            {activeId !== null && (
-              <span
-                className={`inline-block h-1.5 w-1.5 rounded-full motion-safe:animate-pulse ${
-                  tab === "chat" ? "bg-white" : "bg-primary-500"
-                }`}
-              />
-            )}
-          </button>
-        </div>
+          </div>
+        </nav>
 
         {/* Model selector; without a base URL it just opens settings. */}
         <div ref={modelRef} className="relative min-w-0 flex-none">
@@ -782,9 +782,10 @@ export function Chat() {
           )}
         </div>
 
-        {/* Connection status: click to re-probe. */}
+        {/* Connection status: click to re-probe. order-first parks it on the
+            header's left while the centred tabs keep the middle. */}
         <button
-          className="flex h-8 flex-none items-center gap-1.5 rounded-lg px-1.5 transition hover:bg-surface-alt"
+          className="order-first flex h-8 flex-none items-center gap-1.5 rounded-lg px-1.5 transition hover:bg-surface-alt"
           title={`${conn.detail}（点击重新检查）`}
           onClick={() => settings !== null && checkConnection(settings)}
         >
@@ -841,24 +842,24 @@ export function Chat() {
             {/* Current screenshot: preview, zoom, copy, save */}
             <section className="ai-card min-[900px]:flex-1">
               <header className="ai-card-head">
-                <span className="ai-card-title">截图</span>
+                <span className="ai-card-title">源截图</span>
                 {natural !== null && (
-                  <span className="text-mini tabular-nums color-ink-dim">
+                  <span className="rounded border border-line bg-sunken px-1.5 py-px font-mono text-micro tabular-nums color-ink-dim">
                     {natural.w} × {natural.h}
                   </span>
                 )}
                 <span className="flex-1" />
                 <button className="ai-headbtn" disabled={preview === null} onClick={copyImage}>
-                  复制
+                  复制原图
                 </button>
                 <button className="ai-headbtn" onClick={saveImage}>
-                  保存
+                  落盘保存
                 </button>
               </header>
               {/* `flex-1` from 900px up: the two cards are stretched to the
                   same height there, and a fixed 320px preview would leave a
                   bare grey band under a taller result card. */}
-              <div className="relative h-[240px] flex-1 min-h-[240px] bg-surface-alt min-[900px]:min-h-[320px]">
+              <div className="checkerboard relative h-[240px] flex-1 min-h-[240px] min-[900px]:min-h-[320px]">
                 {/* Scroller is its own layer so the zoom pill can stay pinned
                     to the card instead of scrolling away with the image.
                     `safe center` keeps the image centred while it fits and
@@ -895,12 +896,12 @@ export function Chat() {
                     <span className="color-ink-dim">加载中…</span>
                   )}
                 </div>
-                <div className="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full border border-line bg-surface/92 p-0.5 shadow-sm backdrop-blur-2">
+                <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-line bg-surface/92 px-1.5 py-1 shadow-sm backdrop-blur-2">
                   <button className="ai-headbtn" title="缩小" onClick={() => zoomBy(-1)}>
                     −
                   </button>
                   <button
-                    className="ai-headbtn min-w-11 justify-center tabular-nums"
+                    className="ai-headbtn min-w-11 justify-center font-mono tabular-nums"
                     title={zoom === "fit" ? "适应窗口，点击切换为 100%" : "点击适应窗口"}
                     onClick={() => setZoom((z) => (z === "fit" ? 1 : "fit"))}
                   >
@@ -908,6 +909,14 @@ export function Chat() {
                   </button>
                   <button className="ai-headbtn" title="放大" onClick={() => zoomBy(1)}>
                     ＋
+                  </button>
+                  <div className="mx-0.5 h-3 w-px bg-line-strong" />
+                  <button
+                    className="ai-headbtn"
+                    title="缩放回适应窗口"
+                    onClick={() => setZoom("fit")}
+                  >
+                    自适应
                   </button>
                 </div>
               </div>
@@ -936,6 +945,11 @@ export function Chat() {
                 {tab === "extract" && act?.status === "done" && act.elapsedMs !== undefined && (
                   <span className="text-mini tabular-nums color-ink-dim">
                     {act.engine} · {act.elapsedMs}ms
+                  </span>
+                )}
+                {tab !== "chat" && act?.status === "done" && act.text !== "" && (
+                  <span className="text-mini tabular-nums color-faint">
+                    共 {act.text.length} 字
                   </span>
                 )}
                 <span className="flex-1" />
@@ -1010,14 +1024,14 @@ export function Chat() {
                           >
                             {message.text === "" && message.streaming ? (
                               <span className="inline-flex items-center gap-2 color-faint">
-                                <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+                                <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse dark:bg-neutral-300" />
                                 思考中…
                               </span>
                             ) : (
                               <div>{message.text}</div>
                             )}
                             {message.error !== undefined && (
-                              <div className="text-error-600">{message.error}</div>
+                              <div className="text-error-600 dark:text-error-400">{message.error}</div>
                             )}
                             {canCopy && (
                               <button
@@ -1062,7 +1076,7 @@ export function Chat() {
                     <div className="whitespace-pre-wrap break-words leading-6 select-text">
                       {act.text === "" ? (
                         <span className="inline-flex items-center gap-2 color-ink-dim">
-                          <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse" />
+                          <span className="inline-block h-2 w-2 rounded-full bg-primary-500 motion-safe:animate-pulse dark:bg-neutral-300" />
                           正在生成…
                         </span>
                       ) : (
@@ -1129,29 +1143,37 @@ export function Chat() {
       )}
 
       {/* Input dock: fixed at the bottom, grows with content */}
-      <div className="flex flex-none items-end gap-2 border-t border-line px-4 py-3">
-        <textarea
-          ref={inputRef}
-          rows={1}
-          className="min-h-9 max-h-40 flex-1 resize-none overflow-y-auto rounded-xl border border-line bg-surface px-3 py-2 leading-6 outline-none select-text transition focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 placeholder:color-faint"
-          value={input}
-          disabled={cropId === ""}
-          placeholder={cropId === "" ? EMPTY_HINT : "向 AI 提问，Enter 发送，Shift+Enter 换行"}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              start("ask");
-            }
-          }}
-        />
-        <button
-          className="ai-btn-primary"
-          disabled={!canAsk || input.trim() === ""}
-          onClick={() => start("ask")}
-        >
-          发送
-        </button>
+      <div className="flex-none border-t border-line px-4 pb-2.5 pt-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={inputRef}
+            rows={1}
+            className="min-h-9 max-h-40 flex-1 resize-none overflow-y-auto rounded-lg border border-line bg-surface px-3.5 py-2 leading-6 shadow-[inset_0_1px_1.5px_rgba(0,0,0,0.03)] outline-none select-text transition focus:border-primary-500 focus:shadow-none focus:ring-2 focus:ring-primary-500/15 placeholder:color-faint"
+            value={input}
+            disabled={cropId === ""}
+            placeholder={cropId === "" ? EMPTY_HINT : "向 AI 追问或发出指令，例如「翻译成英文」"}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                start("ask");
+              }
+            }}
+          />
+          <button
+            className="ai-btn-primary"
+            disabled={!canAsk || input.trim() === ""}
+            onClick={() => start("ask")}
+          >
+            发送
+          </button>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between px-0.5 text-micro color-faint">
+          <span>
+            Enter 发送 · Shift + Enter 换行
+          </span>
+          {cropId !== "" && <span>已携带截图上下文</span>}
+        </div>
       </div>
 
       {confirmClear && (

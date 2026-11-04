@@ -163,6 +163,15 @@ export function IconChevronRight(props: IconProps) {
   );
 }
 
+/** Select controls' dropdown affordance. */
+export function IconChevronDown(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M6.5 9.5l5.5 5 5.5-5" />
+    </Glyph>
+  );
+}
+
 /** Close ✕ for the preview layer's floating button. */
 export function IconX(props: IconProps) {
   return (
