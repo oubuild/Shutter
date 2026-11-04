@@ -14,6 +14,7 @@
 //! * a handshake watchdog: the bar must answer
 //!   `scroll_screenshot_bar_panel_loaded` or the session tears itself down.
 
+use crate::compose::PixelRect;
 use crate::scroll::pipeline::{decide, direction_reversed, median_recent, FrameDecision};
 use crate::scroll::stitch::Stitcher;
 use crate::types::Rect;
@@ -56,6 +57,10 @@ const BOTTOM_STILL_FRAMES: u32 = 6;
 
 /// Height (px) beyond which stitching stops for safety (memory guard).
 const MAX_ACCUMULATED_HEIGHT: u32 = 60_000;
+
+/// The reference panel rejects the 3px untrusted ring around a live capture.
+/// Keep the inset in physical pixels, after the one logical→physical conversion.
+const CAPTURE_INSET_PX: u32 = 3;
 
 /// How long the bar window has to answer the handshake before the session
 /// tears down (reference `arm_scroll_bar_handshake_watchdog`).
@@ -260,20 +265,20 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
 
     let monitor_info = crate::capture::find_display(monitor)?.info;
 
-    // CSS px → physical px for capture. The panel already inset 3px per edge
-    // (its `Pe` rejects the untrusted outer ring).
+    // CSS px → physical px for capture. The panel sends logical bounds; this is
+    // the only scale conversion, then the untrusted outer ring is trimmed.
     let rect = Rect {
         x: payload.x,
         y: payload.y,
         width: payload.width,
         height: payload.height,
     };
-    let pixel_rect = crate::compose::to_pixel_rect(
+    let pixel_rect = inset_capture_rect(crate::compose::to_pixel_rect(
         rect,
         payload.scale_factor,
         monitor_info.pixel_width,
         monitor_info.pixel_height,
-    )?;
+    )?);
 
     // Give the compositor a beat so the first frame is clean (the panel is
     // transparent, but the bar window below may still be materialising).
@@ -321,6 +326,12 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
         "start_screen_recording_event",
         crate::scroll::types::StartRecordingEvent { monitor_id: monitor },
     );
+    if !auto_scroll {
+        let _ = app.emit(
+            "scroll_screenshot_error",
+            serde_json::json!({ "message": "无辅助功能权限，请手动滚动页面" }),
+        );
+    }
 
     // Reference `arm_scroll_bar_handshake_watchdog`: if the bar never answers
     // `scroll_screenshot_bar_panel_loaded`, tear the session down.
@@ -587,6 +598,24 @@ fn capture_from(display: &crate::capture::Display, rect: &crate::compose::PixelR
     Ok(image::imageops::crop_imm(&frame, x, y, w, h).to_image())
 }
 
+/// Only the auto-scroller can prove the page has reached its bottom. In manual
+/// mode an initially still page is waiting for the user, not finished.
+fn should_stop_at_bottom(auto_scroll: bool, still_frames: u32) -> bool {
+    auto_scroll && still_frames >= BOTTOM_STILL_FRAMES
+}
+
+/// Trim up to 3 physical pixels per edge while keeping at least one pixel.
+fn inset_capture_rect(rect: PixelRect) -> PixelRect {
+    let ix = ((rect.width.saturating_sub(1)) / 2).min(CAPTURE_INSET_PX);
+    let iy = ((rect.height.saturating_sub(1)) / 2).min(CAPTURE_INSET_PX);
+    PixelRect {
+        x: rect.x + ix,
+        y: rect.y + iy,
+        width: rect.width - ix * 2,
+        height: rect.height - iy * 2,
+    }
+}
+
 /// One-shot capture on the caller's thread.
 fn capture_region(monitor_id: u32, rect: &crate::compose::PixelRect) -> Result<RgbaImage> {
     capture_from(&crate::capture::find_display(monitor_id)?, rect)
@@ -760,7 +789,7 @@ fn worker_loop(
             FrameDecision::Still => {
                 bottom_stills += 1;
                 log::info!("[长截图] 页面几乎未滚动 → 本帧不追加");
-                if bottom_stills >= BOTTOM_STILL_FRAMES {
+                if should_stop_at_bottom(auto, bottom_stills) {
                     log::info!("[长截图] 已到达页面底部 → 停止捕获");
                     let _ = app.emit("scroll_screenshot_click_stop", ());
                     let _ = app.emit("scroll_screenshot_pause_state", true);
@@ -856,4 +885,45 @@ fn worker_loop(
     }
 
     *control.result.lock().unwrap() = Some(stitcher);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_inset_runs_after_the_single_scale_conversion() {
+        let logical = Rect {
+            x: 100.0,
+            y: 80.0,
+            width: 600.0,
+            height: 400.0,
+        };
+        let physical = crate::compose::to_pixel_rect(logical, 2.0, 2880, 1800).unwrap();
+        assert_eq!(
+            physical,
+            PixelRect {
+                x: 200,
+                y: 160,
+                width: 1200,
+                height: 800,
+            }
+        );
+        assert_eq!(
+            inset_capture_rect(physical),
+            PixelRect {
+                x: 203,
+                y: 163,
+                width: 1194,
+                height: 794,
+            }
+        );
+    }
+
+    #[test]
+    fn manual_mode_waits_for_the_user_instead_of_stopping_at_bottom() {
+        assert!(!should_stop_at_bottom(false, BOTTOM_STILL_FRAMES));
+        assert!(!should_stop_at_bottom(true, BOTTOM_STILL_FRAMES - 1));
+        assert!(should_stop_at_bottom(true, BOTTOM_STILL_FRAMES));
+    }
 }

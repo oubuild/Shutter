@@ -53,21 +53,6 @@ function normalize(
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
-/** Capture inset (reference `Pe`): 3px per edge, clamped to odd sizes. */
-function captureInset(b: Bounds, scale: number): Bounds & { scaleFactor: number } {
-  const w = Math.round(b.width * scale);
-  const h = Math.round(b.height * scale);
-  const ix = Math.max(0, Math.min(3, Math.floor((w - 1) / 2)));
-  const iy = Math.max(0, Math.min(3, Math.floor((h - 1) / 2)));
-  return {
-    x: Math.round(b.x * scale) + ix,
-    y: Math.round(b.y * scale) + iy,
-    width: w - ix * 2,
-    height: h - iy * 2,
-    scaleFactor: scale,
-  };
-}
-
 /** Resize one edge set (reference `$e`); min size 200 (reference `p`). */
 const MIN_SIZE = 200;
 
@@ -516,21 +501,10 @@ export function ScrollScreen() {
   const armTimer1 = useRef<number | null>(null);
   const armTimer2 = useRef<number | null>(null);
 
-  const dpr = () => window.devicePixelRatio || 1;
-
-  const quit = useCallback(() => {
-    void api.hideScrollScreenshotPanel().catch(() => {});
-    setBounds(null);
-    setIsRecording(false);
-    setIsStart(false);
-    setSessionStarted(false);
-    setPreviewUrl("");
-  }, []);
-
   /** Disarm both timers (reference `P`). */
   const cancelArm = useCallback(() => {
     beat.current += 1;
-    if (isStart) setIsStart(false);
+    setIsStart(false);
     if (armTimer1.current !== null) {
       window.clearTimeout(armTimer1.current);
       armTimer1.current = null;
@@ -539,8 +513,16 @@ export function ScrollScreen() {
       window.clearTimeout(armTimer2.current);
       armTimer2.current = null;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStart]);
+  }, []);
+
+  const quit = useCallback(() => {
+    cancelArm();
+    void api.hideScrollScreenshotPanel().catch(() => {});
+    setBounds(null);
+    setIsRecording(false);
+    setSessionStarted(false);
+    setPreviewUrl("");
+  }, [cancelArm]);
 
   /* ---------------------------------------------------- data + lifecycle */
 
@@ -845,10 +827,10 @@ export function ScrollScreen() {
 
   const cropRect = (b: Bounds) => ({
     monitorId: monitorId ?? 0,
-    x: Math.round(b.x * dpr()),
-    y: Math.round(b.y * dpr()),
-    width: Math.round(b.width * dpr()),
-    height: Math.round(b.height * dpr()),
+    x: b.x,
+    y: b.y,
+    width: b.width,
+    height: b.height,
   });
 
   /** 保存 (copy) — reference `he`. */
@@ -902,20 +884,22 @@ export function ScrollScreen() {
       const b = boundsRef.current;
       if (beat.current !== myBeat || !b || !isRecordingRef.current) return;
       const scale = selScaleRef.current ?? window.devicePixelRatio;
-      const rect = captureInset(b, scale);
       setSessionStarted(true);
       void api
         .startScrollScreenshot({
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          scaleFactor: rect.scaleFactor,
+          // Logical CSS px; Rust performs the only scale conversion and then
+          // applies the capture inset in physical pixels.
+          x: b.x,
+          y: b.y,
+          width: b.width,
+          height: b.height,
+          scaleFactor: scale,
         })
         .catch((e: unknown) => {
           if (beat.current === myBeat) {
             setIsStart(false);
             setIsRecording(false);
+            setSessionStarted(false);
             setErrorTip(String(e));
             window.setTimeout(() => setErrorTip(null), 3000);
           }
@@ -936,8 +920,8 @@ export function ScrollScreen() {
     selScaleRef.current = selScale;
   }, [bounds, isStart, isRecording, selScale]);
 
-  /* Disarm on unmount. */
-  useEffect(() => cancelArm(), [cancelArm]);
+  /* Disarm on unmount, not whenever `isStart` changes mid-arm. */
+  useEffect(() => cancelArm, [cancelArm]);
 
   /* Right-click cancels while still drawable (reference `ze` `b`). */
   const onContextMenu = useCallback(
