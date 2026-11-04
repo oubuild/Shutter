@@ -12,7 +12,7 @@
  * toasts. Escape and the ✕ button close; the zoom chip resets the view.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, type GalleryItem } from "../lib/ipc";
 import { IS_MAC } from "../lib/shortcut";
 import {
@@ -54,13 +54,38 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
   const [full, setFull] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   /** Optimistic "已复制" swap on the primary button. */
   const [copied, setCopied] = useState(false);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const transformRef = useRef<HTMLDivElement | null>(null);
   const dragStart = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+  const panRef = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const frameRef = useRef<number | null>(null);
+
+  // Pointer moves can arrive faster than the display refreshes. Keep the
+  // gesture out of React state and write one compositor transform per frame.
+  const applyTransform = useCallback(() => {
+    frameRef.current = null;
+    const el = transformRef.current;
+    if (!el) return;
+    const { x, y } = panRef.current;
+    el.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${zoomRef.current})`;
+  }, []);
+
+  const scheduleTransform = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(applyTransform);
+  }, [applyTransform]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
 
   // Full-resolution load (copy and zoom both need the original, not the
   // thumbnail); switching items also resets the view.
@@ -68,8 +93,10 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
     let alive = true;
     setFull(null);
     setError(null);
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    scheduleTransform();
     setZoom(1);
-    setPan({ x: 0, y: 0 });
     api
       .galleryFullImage(item.path)
       .then((url) => {
@@ -81,7 +108,7 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
     return () => {
       alive = false;
     };
-  }, [item.path]);
+  }, [item.path, scheduleTransform]);
 
   // Escape closes.
   useEffect(() => {
@@ -101,32 +128,53 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      setZoom((z) => clampZoom(z + (e.deltaY < 0 ? 0.15 : -0.15)));
+      const next = clampZoom(zoomRef.current + (e.deltaY < 0 ? 0.15 : -0.15));
+      if (next === zoomRef.current) return;
+      zoomRef.current = next;
+      setZoom(next);
+      scheduleTransform();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [scheduleTransform]);
 
   const resetView = () => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    scheduleTransform();
     setZoom(1);
-    setPan({ x: 0, y: 0 });
   };
 
   // Drag-to-pan on the stage; the zoom pill inside must still work.
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest("button")) return;
-    dragStart.current = { px: e.clientX, py: e.clientY, x: pan.x, y: pan.y };
+    dragStart.current = { px: e.clientX, py: e.clientY, x: panRef.current.x, y: panRef.current.y };
     setDragging(true);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const start = dragStart.current;
     if (!start) return;
-    setPan({ x: start.x + (e.clientX - start.px), y: start.y + (e.clientY - start.py) });
+    panRef.current = {
+      x: start.x + (e.clientX - start.px),
+      y: start.y + (e.clientY - start.py),
+    };
+    scheduleTransform();
   };
   const endDrag = () => {
     dragStart.current = null;
+    // Flush the newest pointer sample before the transition class comes back.
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      applyTransform();
+    }
     setDragging(false);
+  };
+
+  const stepZoom = (delta: number) => {
+    zoomRef.current = clampZoom(zoomRef.current + delta);
+    scheduleTransform();
+    setZoom(zoomRef.current);
   };
 
   const handleCopy = () => {
@@ -187,10 +235,11 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
         role="presentation"
       >
         <div
+          ref={transformRef}
           className={`relative overflow-hidden rounded-xl border border-line bg-surface-alt shadow-2xl ${
             dragging ? "" : "transition-transform duration-150"
           }`}
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+          style={{ willChange: dragging ? "transform" : undefined }}
         >
           <img
             className="block select-none object-contain"
@@ -215,7 +264,7 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
             title="缩小"
             aria-label="缩小"
             className="flex h-6 w-6 items-center justify-center rounded color-ink-dim transition hover:bg-surface-alt hover:color-ink active:scale-95"
-            onClick={() => setZoom((z) => clampZoom(z - 0.25))}
+            onClick={() => stepZoom(-0.25)}
           >
             <IconMinus size={13} />
           </button>
@@ -225,7 +274,7 @@ export function Preview({ item, src, onClose, onCopy, onReveal, onDelete }: Prop
             title="放大"
             aria-label="放大"
             className="flex h-6 w-6 items-center justify-center rounded color-ink-dim transition hover:bg-surface-alt hover:color-ink active:scale-95"
-            onClick={() => setZoom((z) => clampZoom(z + 0.25))}
+            onClick={() => stepZoom(0.25)}
           >
             <IconPlus size={13} />
           </button>
