@@ -1019,7 +1019,7 @@ fn worker_loop(
             }
             FrameDecision::TooLarge
             | FrameDecision::LowConfidence
-            | FrameDecision::VerifyFailed => {
+            | FrameDecision::VerifyFailed { .. } => {
                 // Older-baseline rescue (reference `relative_offset_from_older`
                 // over the frame ring): the same capture can still align
                 // against the frame before the last one when this particular
@@ -1050,14 +1050,35 @@ fn worker_loop(
                 // animating; re-capture the same position and retry a bounded
                 // number of times.
                 let reason = match &decision {
-                    FrameDecision::TooLarge => "位移过大",
-                    FrameDecision::LowConfidence => "位移置信度不足",
-                    _ => "横向分区未形成一致画面",
+                    FrameDecision::TooLarge => "位移过大".to_string(),
+                    FrameDecision::LowConfidence => "位移置信度不足".to_string(),
+                    FrameDecision::VerifyFailed { offset, report } => format!(
+                        "像素校验未通过（{}）off={} {}",
+                        report.failing_gate().unwrap_or("未知"),
+                        offset,
+                        report.describe()
+                    ),
+                    _ => "未知拒绝原因".to_string(),
                 };
                 log::info!("[长截图][重抓] {reason} → 原地重抓");
                 diag_log.log(&format!(
                     "capture rejected ({reason}) → 原地重抓 frame_id={frame_id}"
                 ));
+                // Rejection-frame recorder (reference `RejectionFrameRecorder`):
+                // the rejected pair on disk is what makes an offline replay of
+                // a failed session possible — without it the only evidence was
+                // the misleading generic reason above.
+                if diag {
+                    if let Ok(dir) =
+                        crate::settings::app_dir().map(|d| d.join("scroll").join("diag"))
+                    {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let _ = stitcher
+                            .last_frame()
+                            .save(dir.join(format!("reject-prev-{frame_id:04}.png")));
+                        let _ = frame.save(dir.join(format!("reject-next-{frame_id:04}.png")));
+                    }
+                }
                 let mut accepted = false;
                 for _ in 0..MAX_REGRAB {
                     std::thread::sleep(SETTLE);

@@ -45,27 +45,62 @@ const MIN_ROW_INTEGRITY: f64 = 0.80;
 /// shifts) that per-sample error averaging dilutes away.
 const MIN_SSIM: f64 = 0.50;
 
+/// Horizontal bands the checked overlap is split into before scoring
+/// (row direction; the "wide-short" disturbance family).
+///
+/// A progress bar, a toast, a hover tooltip or a wide banner that appears
+/// mid-session only ruins the one or two bands it sits in, so the median
+/// band still describes the aligned majority.
+const VERIFY_BANDS: u32 = 6;
+
+/// Vertical tiles the checked overlap is split into before scoring
+/// (column direction; reference `verify_alignment_regions` +
+/// `verify_macos_horizontal`: 12 strips across the width, each scored
+/// independently, majority vote via median).
+///
+/// This is the "tall-narrow" disturbance family — the dominant real-world
+/// failure: a lazy-loaded image, a video region or a chat bubble spans a
+/// third of the width but nearly the whole overlap height, so EVERY row band
+/// is poisoned and the row-band median rightly fails; across columns,
+/// however, only the minority of tiles it covers vote against, and the tile
+/// median still describes the aligned majority. A genuinely wrong offset
+/// fails *every* tile, so the median keeps failing closed.
+const VERIFY_TILES: u32 = 12;
+
+/// A band with fewer checked rows than this is not scored on its own.
+const MIN_BAND_ROWS: u32 = 12;
+
+/// Whole-overlap MAE ceiling on top of the per-band median (the reference's
+/// `strong_global` companion). The median tolerates a disturbed minority of
+/// bands; this bound stops a frame whose *majority* is wrong from slipping
+/// through on a few clean bands.
+const MAX_GLOBAL_MAE: f64 = 40.0;
+
 /// Rows at the very top/bottom of a frame that are never trusted for matching
 /// (scrollbars, rounding, partial repaint), mirroring the reference's inset.
 const EDGE_INSET: u32 = 3;
 
 /// Commit-time seam sweep radius (reference `seam` stage). The row matcher's
-/// grid can alias on smooth pages — a gradient matches at many offsets, so the
-/// LCS candidate can sit ~10px off the true displacement while every verifier
-/// gate still passes, and committing it tears the image at the join (replayed
-/// on real rendered frames: a 240px step accepted as 230px with mae=6.4).
-/// Sampling the same MAE over ±SEAM_RADIUS at commit time recovers the exact
-/// offset before the append is allowed.
-const SEAM_RADIUS: i64 = 12;
+/// grid can alias on self-similar pages — a text line pitch (~24px) makes the
+/// adjacent line match almost as well as the true row, and every verifier
+/// gate still passes, so the commit tears the image by up to a line.
+/// (Replayed on real rendered frames: a 360px step accepted as 337px, one
+/// line pitch off.) Sampling the same MAE over ±SEAM_RADIUS at 1px steps
+/// recovers the exact offset before the append is allowed.
+const SEAM_RADIUS: i64 = 28;
 
-/// An accepted alignment this clean is never re-swept (the reference's
-/// steady-state mae runs 0.0–0.7 on 20px steps): the seam stage only pays for
-/// itself when the verifier passed with visible residual error.
-const SEAM_CLEAN_MAE: f64 = 1.5;
+/// An accepted alignment this clean is never re-swept: the seam stage only
+/// pays for itself when the verifier passed with visible residual error.
+/// (The steady-state mae on clean captures runs 0.0–0.2; a page's own
+/// anti-aliasing noise rarely exceeds 0.4.)
+const SEAM_CLEAN_MAE: f64 = 0.4;
 
 /// A seam candidate must beat the verified estimate by this MAE margin, so
 /// sensor noise on a genuinely correct offset cannot dither the commit.
-const SEAM_MARGIN: f64 = 1.5;
+/// (Scaled to the residual-error range the seam stage acts on — the same
+/// scale as `SEAM_CLEAN_MAE`; the old 1.5 let a 0.5-mae alias keep the
+/// commit against a 0.0-mae exact offset.)
+const SEAM_MARGIN: f64 = 0.3;
 
 /// Maximum plausible scroll distance per step (px). Anything larger is
 /// treated as a jump (pageDown, tab switch) and rejected rather than stitched.
@@ -98,7 +133,9 @@ pub enum FrameDecision {
     /// The page moved backwards (or sideways beyond tolerance) — intercept.
     Reversed,
     /// Alignment looked fine but pixel verification failed (fail-closed).
-    VerifyFailed,
+    /// Carries the rejected candidate and its scores so the session log can
+    /// say *which* gate failed instead of guessing.
+    VerifyFailed { offset: i64, report: VerifyReport },
 }
 
 /// Grayscale luminance row of `frame`, averaged over `line_height` rows.
@@ -326,13 +363,38 @@ fn row_edge(img: &RgbaImage, y: u32) -> f64 {
     if w < 2 {
         return 0.0;
     }
+    row_edge_span(img, y, 0, w)
+}
+
+/// Edge energy per row over a horizontal span [x_lo, x_hi): the per-region
+/// variant used by the column tiles.
+fn row_edge_span(img: &RgbaImage, y: u32, x_lo: u32, x_hi: u32) -> f64 {
+    if x_hi <= x_lo + 1 {
+        return 0.0;
+    }
     let mut acc = 0f64;
-    for x in 0..w - 1 {
+    for x in x_lo..x_hi - 1 {
         let a = luma_at(img, x, y);
         let b = luma_at(img, x + 1, y);
         acc += (b - a).abs();
     }
-    acc / w as f64
+    acc / (x_hi - x_lo) as f64
+}
+
+/// Dense column sampling for verification: ~1 column per 6px (capped at 240),
+/// in the same scrollbar-avoiding range as `sample_xs`. The 24-column set of
+/// `sample_xs` is for estimation; the verifier needs ~12 samples per column
+/// tile for its per-tile scores to be meaningful.
+fn verify_xs(w: u32) -> Vec<u32> {
+    let n = (((w / 6) as usize).max(12)).min(240);
+    let lo = (w as f64 * 0.04).ceil() as u32;
+    let hi = w.saturating_sub(lo);
+    if n == 1 || hi <= lo {
+        return vec![w / 2];
+    }
+    (0..n)
+        .map(|i| lo + (i as f64 * (hi - lo) as f64 / (n - 1) as f64).round() as u32)
+        .collect()
 }
 
 /// Pixel-granularity refinement around the coarse estimate (the role the
@@ -451,12 +513,25 @@ fn row_ssim(a: &[f64], b: &[f64]) -> f64 {
 
 /// The verifier's measurements over the aligned overlap (reference
 /// `verify::overlap_mae / overlap_ssim / overlap_edge_ncc / row`).
+///
+/// Every gate value is the *effective* score: the better of the two region
+/// families (row bands, column tiles), each already reduced by median. A
+/// local disturbance poisons at most one family's majority, so the aligned
+/// majority of the other family carries the frame; a wrong offset poisons
+/// both. `band_mae` / `tile_mae` keep the two medians for the diag log.
 #[derive(Debug, Clone, Copy)]
 pub struct VerifyReport {
+    /// Effective gate MAE = min(band median, tile median).
     pub mae: f64,
+    /// Median MAE across the row bands.
+    pub band_mae: f64,
+    /// Median MAE across the column tiles.
+    pub tile_mae: f64,
     pub edge_ncc: f64,
     pub row_score: f64,
     pub ssim: f64,
+    /// Whole-overlap MAE, guarded by `MAX_GLOBAL_MAE` (`strong_global`).
+    pub global_mae: f64,
     /// Sampled positions behind the report; 0 means the whole overlap was
     /// sticky UI (the caller treats that as Still, nothing scrollable).
     pub samples: u64,
@@ -469,59 +544,99 @@ impl VerifyReport {
             && self.edge_ncc >= MIN_EDGE_NCC
             && self.row_score >= MIN_ROW_INTEGRITY
             && self.ssim >= MIN_SSIM
+            && self.global_mae <= MAX_GLOBAL_MAE
+    }
+
+    /// One-line dump for the session diag log: the effective gate values plus
+    /// both families' MAE medians, so a rejection names the gate that killed
+    /// it AND which family was poisoned.
+    pub fn describe(&self) -> String {
+        format!(
+            "mae={:.1}(band {:.1}/tile {:.1}) edge={:.2} row={:.2} ssim={:.2} \
+             global_mae={:.1} n={}",
+            self.mae, self.band_mae, self.tile_mae, self.edge_ncc, self.row_score, self.ssim,
+            self.global_mae, self.samples
+        )
+    }
+
+    /// The gate that failed, in priority order — the rejection reason the
+    /// session controller reports instead of a generic "校验未通过".
+    /// None means every gate passed.
+    pub fn failing_gate(&self) -> Option<&'static str> {
+        if self.samples == 0 {
+            Some("无可校验的滚动区域")
+        } else if self.global_mae > MAX_GLOBAL_MAE {
+            Some("整体差异过大")
+        } else if self.mae > MAX_MAE {
+            Some("重叠差异过大")
+        } else if self.edge_ncc < MIN_EDGE_NCC {
+            Some("边缘结构不一致")
+        } else if self.row_score < MIN_ROW_INTEGRITY {
+            Some("行完整度不足")
+        } else if self.ssim < MIN_SSIM {
+            Some("结构相似度不足")
+        } else {
+            None
+        }
     }
 }
 
 fn verify_rejected() -> VerifyReport {
     VerifyReport {
         mae: 255.0,
+        band_mae: 255.0,
+        tile_mae: 255.0,
         edge_ncc: -1.0,
         row_score: 0.0,
         ssim: 0.0,
+        global_mae: 255.0,
         samples: 1,
     }
 }
 
-/// Pixel-level verification of `offset` between the previously appended frame
-/// and the new one (reference `V2Engine::verify`). Rows identical at the same
-/// frame-local y (fixed header/footer) are excluded, mirroring the signature
-/// mask the matcher uses; MAE, edge NCC, row integrity and SSIM all have to
-/// pass over the non-sticky overlap.
-pub fn verify_alignment(prev: &RgbaImage, next: &RgbaImage, offset: i64) -> VerifyReport {
-    if prev.dimensions() != next.dimensions() || offset < 1 {
-        return verify_rejected();
+/// Median of the per-band scores; empty input means "no evidence" and is
+/// reported as 0 by the caller's own convention.
+fn median_band(mut values: Vec<f64>) -> f64 {
+    if values.is_empty() {
+        return 0.0;
     }
-    let (w, h) = prev.dimensions();
-    let overlap = ((next.height() as i64 - offset)
-        .min(h as i64 - offset)
-        .max(0)) as u32;
-    if overlap < MIN_OVERLAP {
-        return verify_rejected();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    if n % 2 == 1 {
+        values[n / 2]
+    } else {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
     }
-    let xs = sample_xs(w);
-    let inset = EDGE_INSET;
-    let check = overlap.saturating_sub(inset * 2);
-    let y_prev_start = offset as u32;
+}
 
-    // Sticky rows: identical luma at the SAME frame-local y in both frames —
-    // the pixel-level twin of the signature mask (fixed header/footer). An
-    // aligned pair is masked when EITHER side lands on one, which also
-    // removes the polluted zone where the old frame's footer overlaps the
-    // new frame's fresh content.
-    let h_rows = h.min(next.height()) as usize;
-    let row_diff: Vec<f64> = (0..h_rows)
-        .map(|y| {
-            xs.iter()
-                .map(|&x| (luma_at(prev, x, y as u32) - luma_at(next, x, y as u32)).abs())
-                .sum::<f64>()
-                / xs.len() as f64
-        })
-        .collect();
-    let same_y_fixed = |y: u32| (y as usize) < row_diff.len() && row_diff[y as usize] < 1.0;
-    let sticky: Vec<bool> = (inset..check + inset)
-        .map(|dy| same_y_fixed(y_prev_start + dy) || same_y_fixed(dy))
-        .collect();
+/// Metrics one scored region contributes (reference `verify_alignment_regions`
+/// scores every region independently and reduces with `verify::median`).
+#[derive(Debug, Clone, Copy, Default)]
+struct RegionScore {
+    mae: f64,
+    ssim: f64,
+    row: f64,
+    edge: f64,
+    /// Sampled positions; 0 → the region carried no evidence (all sticky).
+    n: u64,
+}
 
+/// Score one rectangular region of the aligned overlap: `rows` are indices
+/// into the checked row range, the x span is [x_lo, x_hi) and `xs` the
+/// sampled verification columns (filtered to the span). Sticky rows are
+/// skipped; MAE / SSIM / row integrity / edge NCC are the region's own.
+fn score_region(
+    prev: &RgbaImage,
+    next: &RgbaImage,
+    y_prev_start: u32,
+    rows: std::ops::Range<usize>,
+    x_lo: u32,
+    x_hi: u32,
+    xs: &[u32],
+    sticky: &[bool],
+    inset: u32,
+) -> RegionScore {
+    let cols: Vec<u32> = xs.iter().copied().filter(|&x| x >= x_lo && x < x_hi).collect();
     let mut mae_acc = 0f64;
     let mut n = 0u64;
     let mut ssim_acc = 0f64;
@@ -530,14 +645,15 @@ pub fn verify_alignment(prev: &RgbaImage, next: &RgbaImage, offset: i64) -> Veri
     let mut rows_total = 0usize;
     let mut ea = Vec::new();
     let mut eb = Vec::new();
-    for (i, dy) in (inset..check + inset).enumerate() {
-        if sticky[i] {
+    for i in rows {
+        if i >= sticky.len() || sticky[i] {
             continue;
         }
-        let mut ra = Vec::with_capacity(xs.len());
-        let mut rb = Vec::with_capacity(xs.len());
+        let dy = inset + i as u32;
+        let mut ra = Vec::with_capacity(cols.len());
+        let mut rb = Vec::with_capacity(cols.len());
         let mut row_mae = 0f64;
-        for &x in &xs {
+        for &x in &cols {
             let a = luma_at(prev, x, y_prev_start + dy);
             let b = luma_at(next, x, dy);
             mae_acc += (a - b).abs();
@@ -554,43 +670,254 @@ pub fn verify_alignment(prev: &RgbaImage, next: &RgbaImage, offset: i64) -> Veri
             }
         }
         rows_total += 1;
-        ea.push(row_edge(prev, y_prev_start + dy));
-        eb.push(row_edge(next, dy));
+        ea.push(row_edge_span(prev, y_prev_start + dy, x_lo, x_hi));
+        eb.push(row_edge_span(next, dy, x_lo, x_hi));
+    }
+    if n == 0 || rows_total == 0 {
+        return RegionScore::default();
+    }
+    RegionScore {
+        mae: mae_acc / n as f64,
+        ssim: if ssim_rows > 0 {
+            ssim_acc / ssim_rows as f64
+        } else {
+            1.0
+        },
+        row: rows_ok as f64 / rows_total as f64,
+        edge: if ea.len() >= 4 {
+            let va = slice_variance(&ea);
+            let vb = slice_variance(&eb);
+            if va < 1e-9 || vb < 1e-9 {
+                // Constant edge energy on either side (smooth gradients, flat
+                // art): the gate has no signal and stays out of the way — the
+                // other three gates carry the decision.
+                1.0
+            } else {
+                ncc_slices(&ea, &eb)
+            }
+        } else {
+            // Too few rows in this region to judge edge structure; the other
+            // gates carry the decision.
+            1.0
+        },
+        n,
+    }
+}
+
+/// (mae, ssim, row, edge) medians over a family's scored regions.
+fn family_medians(scores: &[RegionScore]) -> Option<(f64, f64, f64, f64)> {
+    let scored: Vec<&RegionScore> = scores.iter().filter(|s| s.n > 0).collect();
+    if scored.is_empty() {
+        return None;
+    }
+    Some((
+        median_band(scored.iter().map(|s| s.mae).collect()),
+        median_band(scored.iter().map(|s| s.ssim).collect()),
+        median_band(scored.iter().map(|s| s.row).collect()),
+        median_band(scored.iter().map(|s| s.edge).collect()),
+    ))
+}
+
+/// Lengths of the contiguous same-y-identical runs touching the frame's top
+/// and bottom — the fixed header/footer heights in frame rows (reference
+/// `margins::detect_fixed_margins`, which trims detected margins only).
+/// The two runs never meet: a frame identical everywhere has no scroll
+/// evidence and is handled upstream as Still.
+fn fixed_margin_runs(row_diff: &[f64]) -> (usize, usize) {
+    let n = row_diff.len();
+    let mut header = 0;
+    while header < n && row_diff[header] < 1.0 {
+        header += 1;
+    }
+    let mut footer = 0;
+    while footer < n - header && row_diff[n - 1 - footer] < 1.0 {
+        footer += 1;
+    }
+    (header, footer)
+}
+
+/// Pixel-level verification of `offset` between the previously appended frame
+/// and the new one (reference `V2Engine::verify` + `verify_alignment_regions`).
+/// Detected fixed-UI margins (header/footer) are excluded.
+///
+/// The checked overlap is scored region-wise in TWO families — row bands
+/// (wide-short tolerance) and column tiles, the reference's 横向分区
+/// (tall-narrow tolerance) — each reduced by median. A frame is accepted when
+/// either family's majority is clean; `MAX_GLOBAL_MAE` caps how much of the
+/// frame may differ outright.
+pub fn verify_alignment(prev: &RgbaImage, next: &RgbaImage, offset: i64) -> VerifyReport {
+    if prev.dimensions() != next.dimensions() || offset < 1 {
+        return verify_rejected();
+    }
+    let (w, h) = prev.dimensions();
+    let overlap = ((next.height() as i64 - offset)
+        .min(h as i64 - offset)
+        .max(0)) as u32;
+    if overlap < MIN_OVERLAP {
+        return verify_rejected();
+    }
+    let xs = verify_xs(w);
+    let inset = EDGE_INSET;
+    let check = overlap.saturating_sub(inset * 2);
+    let y_prev_start = offset as u32;
+
+    // Row identity at the SAME frame-local y: fixed UI (header/footer) shows
+    // the same pixels in both frames regardless of scroll.
+    let h_rows = h.min(next.height()) as usize;
+    let row_diff: Vec<f64> = (0..h_rows)
+        .map(|y| {
+            xs.iter()
+                .map(|&x| (luma_at(prev, x, y as u32) - luma_at(next, x, y as u32)).abs())
+                .sum::<f64>()
+                / xs.len() as f64
+        })
+        .collect();
+    // Fixed-UI zones: contiguous runs of rows identical at the same
+    // frame-local y, extending inward from the frame's top (header) and
+    // bottom (footer) — the pixel-level twin of the signature margin mask.
+    // ONLY margins are masked. A flat region in the MIDDLE that happens to
+    // match at the same y (solid placeholder, uniform background) must still
+    // be scored: treating it as sticky let a wrong offset's only differing
+    // rows hide behind false "sticky" verdicts (replayed on real rendered
+    // frames: a 428px alias accepted on a page with a 420px gray placeholder).
+    let (header_rows, footer_rows) = fixed_margin_runs(&row_diff);
+    let in_fixed = |y: usize| y < header_rows || y >= h_rows - footer_rows;
+    let sticky: Vec<bool> = (0..check as usize)
+        .map(|i| {
+            let y = inset as usize + i;
+            let y_prev = y_prev_start as usize + y;
+            in_fixed(y) || y_prev < header_rows || y_prev >= h_rows - footer_rows
+        })
+        .collect();
+
+    let total_rows = check as usize;
+
+    // Family A — row bands: full width, contiguous row slices.
+    let n_bands = (VERIFY_BANDS as usize)
+        .min((total_rows / MIN_BAND_ROWS as usize).max(1))
+        .max(1);
+    let rows_per_band = total_rows.div_ceil(n_bands);
+    let band_scores: Vec<RegionScore> = (0..n_bands)
+        .filter_map(|band| {
+            let start = band * rows_per_band;
+            let end = ((band + 1) * rows_per_band).min(total_rows);
+            if start >= end {
+                return None;
+            }
+            Some(score_region(
+                prev,
+                next,
+                y_prev_start,
+                start..end,
+                0,
+                w,
+                &xs,
+                &sticky,
+                inset,
+            ))
+        })
+        .collect();
+
+    // Family B — column tiles: full checked height, contiguous x slices over
+    // the scrollbar-avoiding range (reference 横向分区, 12 strips).
+    let lo = (w as f64 * 0.04).ceil() as u32;
+    let hi = w.saturating_sub(lo);
+    let n_tiles = VERIFY_TILES as usize;
+    let tile_scores: Vec<RegionScore> = (0..n_tiles)
+        .filter_map(|t| {
+            let x0 = lo + (hi - lo) * t as u32 / n_tiles as u32;
+            let x1 = lo + (hi - lo) * (t + 1) as u32 / n_tiles as u32;
+            if x1 <= x0 + 1 {
+                return None;
+            }
+            Some(score_region(
+                prev,
+                next,
+                y_prev_start,
+                0..total_rows,
+                x0,
+                x1,
+                &xs,
+                &sticky,
+                inset,
+            ))
+        })
+        .collect();
+
+    let samples = band_scores
+        .iter()
+        .chain(tile_scores.iter())
+        .map(|s| s.n)
+        .sum();
+    if samples == 0 {
+        // Everything sticky: the caller reads samples == 0 as Still.
+        return VerifyReport {
+            mae: 255.0,
+            band_mae: 255.0,
+            tile_mae: 255.0,
+            edge_ncc: 1.0,
+            row_score: 1.0,
+            ssim: 1.0,
+            global_mae: 0.0,
+            samples: 0,
+        };
     }
 
-    let mae = if n > 0 { mae_acc / n as f64 } else { 255.0 };
-    let ssim = if ssim_rows > 0 {
-        ssim_acc / ssim_rows as f64
-    } else {
-        0.0
+    let band = family_medians(&band_scores);
+    let tile = family_medians(&tile_scores);
+    // Effective gate values: the better family carries the frame (MAE is a
+    // cost → min; the similarities → max). A family with no scored regions
+    // defers to the other; both empty cannot happen (samples > 0 above).
+    let (band_mae, tile_mae) = match (band, tile) {
+        (Some(b), Some(t)) => (b.0, t.0),
+        (Some(b), None) => (b.0, 255.0),
+        (None, Some(t)) => (255.0, t.0),
+        (None, None) => (255.0, 255.0),
     };
-    let edge_ncc = if ea.len() >= 8 {
-        let va = slice_variance(&ea);
-        let vb = slice_variance(&eb);
-        if va < 1e-9 || vb < 1e-9 {
-            // Constant edge energy on either side (smooth gradients, flat
-            // art): the gate has no signal and stays out of the way — the
-            // other three gates carry the decision.
-            1.0
-        } else {
-            ncc_slices(&ea, &eb)
+    let mae = match (band, tile) {
+        (Some(b), Some(t)) => b.0.min(t.0),
+        (Some(b), None) => b.0,
+        (None, Some(t)) => t.0,
+        (None, None) => 255.0,
+    };
+    let combine = |bidx: usize, tidx: usize, better_max: bool| -> f64 {
+        let get = |m: Option<(f64, f64, f64, f64)>, i: usize| m.map(|t| [t.0, t.1, t.2, t.3][i]);
+        match (get(band, bidx), get(tile, tidx)) {
+            (Some(bv), Some(tv)) => {
+                if better_max {
+                    bv.max(tv)
+                } else {
+                    bv.min(tv)
+                }
+            }
+            (bv, tv) => bv.or(tv).unwrap_or(1.0),
         }
-    } else {
-        // Not enough non-sticky rows to judge: accept on the estimator's
-        // evidence alone (this is a mostly-fixed viewport).
-        1.0
     };
-    let row_score = if rows_total > 0 {
-        rows_ok as f64 / rows_total as f64
-    } else {
-        1.0
+    let ssim = combine(1, 1, true);
+    let row_score = combine(2, 2, true);
+    let edge_ncc = combine(3, 3, true);
+
+    // Whole-overlap MAE over the band family (it covers every row × sampled
+    // column once): n-weighted mean of the band MAEs.
+    let global_mae = {
+        let scored: Vec<&RegionScore> = band_scores.iter().filter(|s| s.n > 0).collect();
+        if scored.is_empty() {
+            255.0
+        } else {
+            let n: u64 = scored.iter().map(|s| s.n).sum();
+            scored.iter().map(|s| s.mae * s.n as f64).sum::<f64>() / n as f64
+        }
     };
+
     VerifyReport {
         mae,
+        band_mae,
+        tile_mae,
         edge_ncc,
         row_score,
         ssim,
-        samples: n,
+        global_mae,
+        samples,
     }
 }
 
@@ -621,21 +948,11 @@ fn evaluate_candidate(
         return FrameDecision::Still;
     }
     if !report.ok() {
-        log::info!(
-            "[长截图][v2] 拒绝硬拼 mae={:.1} edge_ncc={:.2} row={:.2} ssim={:.2}",
-            report.mae,
-            report.edge_ncc,
-            report.row_score,
-            report.ssim
-        );
+        log::info!("[长截图][v2] 拒绝硬拼 off={offset} {}", report.describe());
         if cfg!(test) {
-            eprintln!(
-                "[probe] src={source} off={offset} conf={confidence:.2} mae={:.1} \
-                 edge={:.2} row={:.2} ssim={:.2} REJECT",
-                report.mae, report.edge_ncc, report.row_score, report.ssim
-            );
+            eprintln!("[probe] src={source} off={offset} conf={confidence:.2} {} REJECT", report.describe());
         }
-        return FrameDecision::VerifyFailed;
+        return FrameDecision::VerifyFailed { offset, report };
     }
 
     // Seam stage (reference `v2 timing stage=seam`): a verifier pass with
@@ -664,19 +981,11 @@ fn evaluate_candidate(
         (offset, report)
     };
     log::info!(
-        "[长截图][v2] src={source} offset={offset} conf={confidence:.2} mae={:.1} \
-         edge_ncc={:.2} row={:.2} ssim={:.2}",
-        report.mae,
-        report.edge_ncc,
-        report.row_score,
-        report.ssim
+        "[长截图][v2] src={source} offset={offset} conf={confidence:.2} {}",
+        report.describe()
     );
     if cfg!(test) {
-        eprintln!(
-            "[probe] src={source} off={offset} conf={confidence:.2} mae={:.1} \
-             edge={:.2} row={:.2} ssim={:.2}",
-            report.mae, report.edge_ncc, report.row_score, report.ssim
-        );
+        eprintln!("[probe] src={source} off={offset} conf={confidence:.2} {}", report.describe());
     }
     FrameDecision::Append { offset, confidence }
 }
@@ -698,7 +1007,12 @@ pub fn decide_with(
     line_height: u32,
 ) -> FrameDecision {
     if prev.dimensions() != next.dimensions() {
-        return FrameDecision::VerifyFailed;
+        // Dimension mismatch never reaches pixel verification, so there is no
+        // report to carry; a rejected-shaped one keeps the payload honest.
+        return FrameDecision::VerifyFailed {
+            offset: 0,
+            report: verify_rejected(),
+        };
     }
     if looks_still(prev, next) {
         return FrameDecision::Still;
@@ -710,17 +1024,23 @@ pub fn decide_with(
     let width = w as usize;
 
     // Sticky (fixed) signature rows: identical at the same frame-local y in
-    // both frames — a fixed header/footer or floating bar (reference
-    // `margins::detect_fixed_margins`). Excluded from matching and
-    // verification alike; their presence at a scroll offset would otherwise
-    // reject every frame of a page with a fixed header.
+    // both frames. Like the pixel verifier, ONLY the contiguous top/bottom
+    // margin runs are masked (reference `margins::detect_fixed_margins`) —
+    // middle rows that happen to match (flat regions) must stay in play, or
+    // the matcher's counted/matched fractions lose the very rows that
+    // distinguish the true offset from a self-similar alias.
     let sig_rows = (prev_rows.len() / width).min(next_rows.len() / width);
-    let fixed: Vec<bool> = (0..sig_rows)
+    let sig_diff: Vec<f64> = (0..sig_rows)
         .map(|r| {
-            let a = &prev_rows[r * width..(r + 1) * width];
-            let b = &next_rows[r * width..(r + 1) * width];
-            mad(a, b) < 1.0
+            mad(
+                &prev_rows[r * width..(r + 1) * width],
+                &next_rows[r * width..(r + 1) * width],
+            )
         })
+        .collect();
+    let (sig_header, sig_footer) = fixed_margin_runs(&sig_diff);
+    let fixed: Vec<bool> = (0..sig_rows)
+        .map(|r| r < sig_header || r >= sig_rows - sig_footer)
         .collect();
 
     let evidence = row_lcs_offset(&prev_rows, &next_rows, width, prior.max(1), &fixed);
@@ -901,6 +1221,9 @@ mod fft {
 
         let mut ncc_sum = vec![0f32; max_lag + 1];
         let mut votes = vec![0u32; max_lag + 1];
+        // Mean NCC at a lag among only the columns that voted for it: the
+        // agreeing subset's quality, unpolluted by locally-changed columns.
+        let mut vote_ncc_sum = vec![0f32; max_lag + 1];
         let mut columns = 0u32;
 
         for &x in &xs {
@@ -949,7 +1272,11 @@ mod fft {
                 let cov = fa[o].re * scale - sa * sb / cnt;
                 let ncc = cov / (va * vb).sqrt();
                 curve[o] = ncc;
-                if ncc > best_val {
+                // +ε: differences at float-noise level are not evidence —
+                // two lags whose NCC agrees to 1e-6 are a tie, and the tie
+                // keeps the earlier (smaller) lag instead of letting rounding
+                // flip the vote.
+                if ncc > best_val + 1e-6 {
                     best_val = ncc;
                     best_lag = o;
                 }
@@ -963,11 +1290,20 @@ mod fft {
             if peak_width > (max_lag / 8).max(8) {
                 continue;
             }
+            if std::env::var("FFT_DEBUG").is_ok() {
+                eprintln!(
+                    "[fft-col] x={x} best_lag={best_lag} best_val={best_val:.3} \
+                     curve80={:.3} curve346={:.3}",
+                    curve.get(80).copied().unwrap_or(0.0),
+                    curve.get(346).copied().unwrap_or(0.0)
+                );
+            }
             for o in 1..=max_lag {
                 ncc_sum[o] += curve[o];
             }
             if best_val >= MIN_PEAK_NCC {
                 votes[best_lag] += 1;
+                vote_ncc_sum[best_lag] += best_val;
             }
             columns += 1;
         }
@@ -975,14 +1311,29 @@ mod fft {
         if columns == 0 {
             return None;
         }
+        // Displacement by majority vote (reference template-voting): a
+        // locally changed block poisons only the columns it covers, and their
+        // votes lose to the majority instead of dragging the aggregate mean —
+        // the mean-NCC argmin picked the block columns' alias on exactly this
+        // case (a 32%-width tall block made lag 346 outscore the true lag 80).
+        // Ties break toward the higher aggregate curve.
         let mut best_lag = 0usize;
-        let mut best_mean = f32::MIN;
-        for (o, &curve) in ncc_sum.iter().enumerate().take(max_lag + 1).skip(1) {
-            let mean = curve / columns as f32;
-            if mean > best_mean {
-                best_mean = mean;
-                best_lag = o;
+        let mut best_votes = 0u32;
+        let mut best_mean = 0f32;
+        for o in 1..=max_lag {
+            let v = votes[o];
+            if v == 0 {
+                continue;
             }
+            let agree_mean = vote_ncc_sum[o] / v as f32;
+            if v > best_votes || (v == best_votes && ncc_sum[o] > ncc_sum[best_lag]) {
+                best_votes = v;
+                best_lag = o;
+                best_mean = agree_mean;
+            }
+        }
+        if best_votes == 0 {
+            return None;
         }
         if cfg!(test) {
             let lo = best_lag.saturating_sub(2);
@@ -1131,7 +1482,11 @@ mod tests {
     fn tiny_scroll_without_overlap_rejects_or_still() {
         // 1px scroll: rows barely move; the engine may call it Still (fine —
         // nothing meaningfully scrolled) but must never mis-append.
-        let src = page(5, 240, 1200);
+        // `textured` (per-pixel noise) rather than `page`: the sparse-noise
+        // generator's modular band arithmetic hand-crafts a near-alias 63px
+        // away (9 bands × its multiplier ≡ −4 mod 256) that no real page
+        // produces.
+        let src = textured(5, 240, 1200);
         let a = window_of(&src, 0, 400);
         let b = window_of(&src, 1, 400);
         match decide(&a, &b, 12) {
@@ -1139,7 +1494,7 @@ mod tests {
             FrameDecision::Append { offset, .. } => assert!(offset <= 2),
             // A sub-line-height scroll straddles the signature grid: refusing
             // it is exactly the reference's fail-closed behaviour.
-            FrameDecision::VerifyFailed | FrameDecision::LowConfidence => {}
+            FrameDecision::VerifyFailed { .. } | FrameDecision::LowConfidence => {}
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -1286,6 +1641,95 @@ mod tests {
         assert!(r_good.ok(), "good: {r_good:?}");
         assert!(!r_bad.ok(), "bad: {r_bad:?}");
         assert!(r_good.ssim > r_bad.ssim);
+    }
+
+    /// The failure this rewrite exists for: a page with one locally changing
+    /// block (lazy-loaded image, video, animation) was rejected by the
+    /// whole-frame verifier on every retry — the real "拼接失败" session had
+    /// 60 clean frames and then 4 of these. Band medians isolate the disturbed
+    /// minority, so the frame must still append at the true offset.
+    #[test]
+    fn local_change_does_not_sink_the_frame() {
+        let src = page(31, 400, 2000);
+        let a = window_of(&src, 0, 400);
+        let mut b = window_of(&src, 80, 400);
+        // Disturb ~1/6 of the frame height: a block matching nothing at any
+        // plausible offset.
+        for y in 100..168 {
+            for x in 60..340 {
+                b.put_pixel(x, y, image::Rgba([200, 40, 40, 255]));
+            }
+        }
+        match decide(&a, &b, 12) {
+            FrameDecision::Append { offset, .. } => assert_eq!(offset, 80),
+            other => panic!("expected Append, got {other:?}"),
+        }
+    }
+
+    /// The reference's 横向分区 case: a TALL-NARROW block (lazy-loaded image,
+    /// video, chat bubble — ~1/3 of the width at real chat proportions) spans
+    /// most of the overlap height. Every row band is poisoned, so the
+    /// row-band family alone would reject — the column-tile family carries
+    /// the frame, exactly what 小旺's 12-strip partition tolerates. Blocks
+    /// covering a MAJORITY of both families are still rejected (see below).
+    #[test]
+    fn tall_narrow_change_passes_via_column_tiles() {
+        // `textured` (per-pixel noise on every column) rather than `page`:
+        // the sparse-noise `page` generator is affine-periodic mod 256, which
+        // hand-crafts a SECOND perfect alignment 266px away — an adversarial
+        // coincidence no real page produces.
+        let src = textured(37, 400, 2000);
+        let a = window_of(&src, 0, 400);
+        let mut b = window_of(&src, 80, 400);
+        // 32% of the width, most of the overlap height.
+        for y in 40..380 {
+            for x in 136..264 {
+                b.put_pixel(x, y, image::Rgba([30, 160, 90, 255]));
+            }
+        }
+        // Direct verifier evidence: bands poisoned, tiles clean, accepted.
+        let r = verify_alignment(&a, &b, 80);
+        assert!(r.ok(), "{r:?}");
+        assert!(r.band_mae > MAX_MAE, "bands should be poisoned: {r:?}");
+        assert!(r.tile_mae <= MAX_MAE, "tiles should be clean: {r:?}");
+        match decide(&a, &b, 12) {
+            FrameDecision::Append { offset, .. } => assert_eq!(offset, 80),
+            other => panic!("expected Append, got {other:?}"),
+        }
+    }
+
+    /// A disturbance covering the majority of BOTH families (a full-screen
+    /// change) is still rejected: the median can only tolerate a minority.
+    #[test]
+    fn majority_change_is_still_rejected() {
+        let src = page(41, 400, 2000);
+        let a = window_of(&src, 0, 400);
+        let mut b = window_of(&src, 80, 400);
+        for y in 20..390 {
+            for x in 30..370 {
+                b.put_pixel(x, y, image::Rgba([90, 30, 160, 255]));
+            }
+        }
+        let r = verify_alignment(&a, &b, 80);
+        assert!(!r.ok(), "{r:?}");
+        assert!(r.band_mae > MAX_MAE && r.tile_mae > MAX_MAE, "{r:?}");
+    }
+
+    /// Fail-closed is preserved: a wrong offset scores badly in EVERY band,
+    /// so no median can rescue it, and the report names the failing gate.
+    /// (`decide` itself never sees this: its estimators recover the true 80
+    /// offset first — this pins the verifier alone.)
+    #[test]
+    fn wrong_offset_fails_every_band_and_names_the_gate() {
+        let src = page(33, 400, 2000);
+        let a = window_of(&src, 0, 400);
+        let b = window_of(&src, 80, 400);
+        let r = verify_alignment(&a, &b, 96);
+        assert!(!r.ok(), "{r:?}");
+        assert!(r.failing_gate().is_some());
+        assert!(r.global_mae > MAX_GLOBAL_MAE, "{r:?}");
+        let (mae, row) = (r.mae, r.row_score);
+        assert!(mae > MAX_MAE || row < MIN_ROW_INTEGRITY, "{r:?}");
     }
 
     /// The smooth-page tear, reduced from the replay corpus: wide bands of
