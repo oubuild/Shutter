@@ -195,7 +195,6 @@ export function Chat() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const modelRef = useRef<HTMLDivElement | null>(null);
   const previewBoxRef = useRef<HTMLDivElement | null>(null);
-  const ocrBodyRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
   const startRef = useRef<((action: AiAction, cropOverride?: string) => void) | null>(null);
 
@@ -410,12 +409,6 @@ export function Chat() {
     };
   }, []);
 
-  /* Auto-scroll only when the user was already near the bottom. */
-  useEffect(() => {
-    const el = logRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-
   /* The box also has to re-measure when the window narrows: the placeholder
      wraps to two lines and a fixed 36px box would clip it. */
   const syncInputHeight = useCallback(() => {
@@ -434,11 +427,11 @@ export function Chat() {
     return () => window.removeEventListener("resize", syncInputHeight);
   }, [syncInputHeight]);
 
-  /* Follow the stream inside the active card: without this the newest tokens
-     land below the fold and the card looks frozen mid-answer. */
+  /* Vertical layout: results grow the page instead of living in their own
+     scroller, so follow the stream on the outer log container. Only do it
+     while the user was already near the bottom — otherwise reading the
+     screenshot card above would get yanked away on every streamed token. */
   useEffect(() => {
-    const body = ocrBodyRef.current;
-    if (body) body.scrollTop = body.scrollHeight;
     const log = logRef.current;
     if (log && stickToBottom.current) log.scrollTop = log.scrollHeight;
   }, [tab, acts, messages]);
@@ -468,6 +461,9 @@ export function Chat() {
   /** Switching to an action tab that never ran starts it — the tab bar is the
       trigger, and a second click just shows the cached result again. */
   function selectTab(next: Tab) {
+    /* In the vertical layout the result card sits below the preview: a tab
+       switch has to bring it back into view even if the user scrolled up. */
+    stickToBottom.current = true;
     setTab(next);
     if (next !== "chat" && acts[next].status === "idle" && cropId !== "" && !busy) {
       if (next === "extract") runExtract();
@@ -478,6 +474,9 @@ export function Chat() {
   function start(action: AiAction, cropOverride?: string) {
     const targetCrop = cropOverride ?? cropId;
     if (!targetCrop || busy) return;
+    /* A new answer starts below the fold; resume following the stream even if
+       the user had scrolled up to inspect the screenshot. */
+    stickToBottom.current = true;
     const question = input.trim();
     if (action === "ask") {
       if (question === "") return;
@@ -553,6 +552,7 @@ export function Chat() {
   function runOcrExtract(cropOverride?: string) {
     const targetCrop = cropOverride ?? cropId;
     if (!targetCrop || busy) return;
+    stickToBottom.current = true;
     const requestId = crypto.randomUUID();
     setPickerOpen(false);
     setToast(null);
@@ -855,9 +855,9 @@ export function Chat() {
             </button>
           </div>
         ) : (
-          <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-stretch">
+          <div className="flex flex-col gap-4">
             {/* Current screenshot: preview, zoom, copy, save */}
-            <section className="ai-card min-[900px]:flex-1">
+            <section className="ai-card">
               <header className="ai-card-head">
                 <span className="ai-card-title">源截图</span>
                 {natural !== null && (
@@ -873,10 +873,11 @@ export function Chat() {
                   落盘保存
                 </button>
               </header>
-              {/* `flex-1` from 900px up: the two cards are stretched to the
-                  same height there, and a fixed 320px preview would leave a
-                  bare grey band under a taller result card. */}
-              <div className="checkerboard relative h-[240px] flex-1 min-h-[240px] min-[900px]:min-h-[320px]">
+              {/* Vertical layout: the preview gets a window-relative band
+                  (scales on resize, floored/capped so both extremes of window
+                  size keep it usable); long content flows the page, and the
+                  zoom pill stays pinned to the card. */}
+              <div className="checkerboard relative h-[38vh] min-h-[200px] max-h-[440px] flex-none">
                 {/* Scroller is its own layer so the zoom pill can stay pinned
                     to the card instead of scrolling away with the image.
                     `safe center` keeps the image centred while it fits and
@@ -940,7 +941,7 @@ export function Chat() {
             </section>
 
             {/* Result card: content follows the active tab */}
-            <section className="ai-card min-[900px]:flex-1">
+            <section className="ai-card">
               <header className="ai-card-head">
                 <span className="ai-card-title">{TAB_LABEL[tab]}</span>
                 {tab === "extract" && !pickerOpen && (
@@ -1066,10 +1067,7 @@ export function Chat() {
                   )}
                 </div>
               ) : (
-                <div
-                  ref={ocrBodyRef}
-                  className="min-h-[140px] flex-1 overflow-y-auto px-3.5 py-3 max-[899px]:max-h-[300px]"
-                >
+                <div className="min-h-[140px] flex-1 px-3.5 py-3">
                   {act?.status === "idle" && (
                     <div className="flex h-full min-h-[120px] flex-col items-center justify-center gap-1.5 text-center">
                       <div className="color-ink-dim">
@@ -1116,7 +1114,7 @@ export function Chat() {
                   {editing && (
                     <textarea
                       autoFocus
-                      className="min-h-[140px] h-full w-full resize-none rounded-lg border border-line bg-surface p-2.5 leading-6 outline-none select-text transition focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
+                      className="min-h-[38vh] max-h-[60vh] w-full resize-y rounded-lg border border-line bg-surface p-2.5 leading-6 outline-none select-text transition focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20"
                       value={editDraft}
                       onChange={(e) => setEditDraft(e.target.value)}
                       onKeyDown={(e) => {

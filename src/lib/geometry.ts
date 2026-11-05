@@ -38,11 +38,18 @@ export function isUsableSelection(box: Box): boolean {
   return box.width >= MIN_SELECTION && box.height >= MIN_SELECTION;
 }
 
-/** Round for display in the size badge. */
-export function formatSize(box: Box, scale: number): string {
-  const w = Math.round(box.width * scale);
-  const h = Math.round(box.height * scale);
-  return `${w} × ${h}`;
+/**
+ * Round for display in the size badge.
+ *
+ * The badge shows the selection in logical points — the size the user sees on
+ * screen — matching the reference app (`Math.round(bounds.width) ×
+ * Math.round(bounds.height)`, no scaleFactor) and our own long-screenshot
+ * panel. Multiplying by the display's scale factor showed retina users twice
+ * the number they'd expect. The saved PNG still carries physical pixels; that
+ * conversion belongs to the capture path, not the badge.
+ */
+export function formatSize(box: Box): string {
+  return `${Math.round(box.width)} × ${Math.round(box.height)}`;
 }
 
 /**

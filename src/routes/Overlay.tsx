@@ -1496,7 +1496,7 @@ export function Overlay({ monitorId }: Props) {
               top: Math.max(0, box.y - 26),
             }}
           >
-            {formatSize(box, monitor?.scaleFactor ?? 1)}
+            {formatSize(box)}
           </div>
         </>
       )}
