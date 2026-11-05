@@ -49,6 +49,24 @@ const MIN_SSIM: f64 = 0.50;
 /// (scrollbars, rounding, partial repaint), mirroring the reference's inset.
 const EDGE_INSET: u32 = 3;
 
+/// Commit-time seam sweep radius (reference `seam` stage). The row matcher's
+/// grid can alias on smooth pages — a gradient matches at many offsets, so the
+/// LCS candidate can sit ~10px off the true displacement while every verifier
+/// gate still passes, and committing it tears the image at the join (replayed
+/// on real rendered frames: a 240px step accepted as 230px with mae=6.4).
+/// Sampling the same MAE over ±SEAM_RADIUS at commit time recovers the exact
+/// offset before the append is allowed.
+const SEAM_RADIUS: i64 = 12;
+
+/// An accepted alignment this clean is never re-swept (the reference's
+/// steady-state mae runs 0.0–0.7 on 20px steps): the seam stage only pays for
+/// itself when the verifier passed with visible residual error.
+const SEAM_CLEAN_MAE: f64 = 1.5;
+
+/// A seam candidate must beat the verified estimate by this MAE margin, so
+/// sensor noise on a genuinely correct offset cannot dither the commit.
+const SEAM_MARGIN: f64 = 1.5;
+
 /// Maximum plausible scroll distance per step (px). Anything larger is
 /// treated as a jump (pageDown, tab switch) and rejected rather than stitched.
 pub(crate) const MAX_STEP: u32 = 640;
@@ -98,10 +116,7 @@ fn row_luma(frame: &RgbaImage, line_height: u32) -> Vec<u8> {
                 // Rec.601 luma, same as the reference's row signatures.
                 // Widened before multiplying: u8 coefficients overflow at
                 // debug-assert level.
-                let l = (px[i] as u32 * 30
-                    + px[i + 1] as u32 * 59
-                    + px[i + 2] as u32 * 11)
-                    / 100;
+                let l = (px[i] as u32 * 30 + px[i + 1] as u32 * 59 + px[i + 2] as u32 * 11) / 100;
                 acc[x] += l;
             }
         }
@@ -368,6 +383,46 @@ fn refine_offset(prev: &RgbaImage, next: &RgbaImage, coarse: i64, line_height: u
     best
 }
 
+/// Sampled-MAE argmin over a ±`radius` window at 1px steps (the estimator half
+/// of the reference's `seam` stage; `verify_alignment` re-gates the winner).
+/// Ties resolve to `center` — the already-verified estimate — so the sweep can
+/// only move the commit when a candidate is strictly better.
+fn seam_sweep(prev: &RgbaImage, next: &RgbaImage, center: i64, radius: i64) -> i64 {
+    let (w, h) = prev.dimensions();
+    let h = h as i64;
+    let xs = sample_xs(w);
+    let mut best = center;
+    let mut best_mae = f64::MAX;
+    for lag in (center - radius).max(1)..=(center + radius) {
+        let overlap = h - lag;
+        if overlap < MIN_OVERLAP as i64 {
+            continue;
+        }
+        let inset = EDGE_INSET as i64;
+        let mut acc = 0f64;
+        let mut n = 0f64;
+        let mut dy = inset;
+        while dy < overlap - inset {
+            for &x in &xs {
+                let a = luma_at(prev, x, (lag + dy) as u32);
+                let b = luma_at(next, x, dy as u32);
+                acc += (a - b).abs();
+                n += 1.0;
+            }
+            dy += 2;
+        }
+        if n > 0.0 {
+            let mae = acc / n;
+            // Strict `<` (not `<=`) keeps `center` on ties.
+            if mae < best_mae {
+                best_mae = mae;
+                best = lag;
+            }
+        }
+    }
+    best
+}
+
 /// SSIM of two equal-length luma slices (0..1), one per row over the sampled
 /// columns (reference `verify::overlap_ssim`, evaluated row-wise). Standard
 /// single-scale formula with the 8-bit constants C1=(0.01·255)², C2=(0.03·255)²;
@@ -391,8 +446,7 @@ fn row_ssim(a: &[f64], b: &[f64]) -> f64 {
     let vb = sbb / nn - mb * mb;
     let cov = sab / nn - ma * mb;
     let (c1, c2) = (6.5025, 58.5225);
-    ((2.0 * ma * mb + c1) * (2.0 * cov + c2))
-        / ((ma * ma + mb * mb + c1) * (va + vb + c2))
+    ((2.0 * ma * mb + c1) * (2.0 * cov + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2))
 }
 
 /// The verifier's measurements over the aligned overlap (reference
@@ -438,7 +492,9 @@ pub fn verify_alignment(prev: &RgbaImage, next: &RgbaImage, offset: i64) -> Veri
         return verify_rejected();
     }
     let (w, h) = prev.dimensions();
-    let overlap = ((next.height() as i64 - offset).min(h as i64 - offset).max(0)) as u32;
+    let overlap = ((next.height() as i64 - offset)
+        .min(h as i64 - offset)
+        .max(0)) as u32;
     if overlap < MIN_OVERLAP {
         return verify_rejected();
     }
@@ -564,10 +620,56 @@ fn evaluate_candidate(
     if report.samples == 0 {
         return FrameDecision::Still;
     }
+    if !report.ok() {
+        log::info!(
+            "[长截图][v2] 拒绝硬拼 mae={:.1} edge_ncc={:.2} row={:.2} ssim={:.2}",
+            report.mae,
+            report.edge_ncc,
+            report.row_score,
+            report.ssim
+        );
+        if cfg!(test) {
+            eprintln!(
+                "[probe] src={source} off={offset} conf={confidence:.2} mae={:.1} \
+                 edge={:.2} row={:.2} ssim={:.2} REJECT",
+                report.mae, report.edge_ncc, report.row_score, report.ssim
+            );
+        }
+        return FrameDecision::VerifyFailed;
+    }
+
+    // Seam stage (reference `v2 timing stage=seam`): a verifier pass with
+    // residual error means the candidate is only approximately right — on
+    // smooth pages several offsets clear every gate. Sweep ±SEAM_RADIUS and
+    // re-gate the argmin; it must beat the estimate by SEAM_MARGIN to move
+    // the commit.
+    let (offset, report) = if report.mae > SEAM_CLEAN_MAE {
+        let cand = seam_sweep(prev, next, offset, SEAM_RADIUS);
+        if cand != offset {
+            let r2 = verify_alignment(prev, next, cand);
+            if r2.ok() && r2.mae + SEAM_MARGIN < report.mae {
+                log::info!(
+                    "[长截图][v2] seam {offset} → {cand} (mae {:.2} → {:.2})",
+                    report.mae,
+                    r2.mae
+                );
+                (cand, r2)
+            } else {
+                (offset, report)
+            }
+        } else {
+            (offset, report)
+        }
+    } else {
+        (offset, report)
+    };
     log::info!(
         "[长截图][v2] src={source} offset={offset} conf={confidence:.2} mae={:.1} \
          edge_ncc={:.2} row={:.2} ssim={:.2}",
-        report.mae, report.edge_ncc, report.row_score, report.ssim
+        report.mae,
+        report.edge_ncc,
+        report.row_score,
+        report.ssim
     );
     if cfg!(test) {
         eprintln!(
@@ -575,13 +677,6 @@ fn evaluate_candidate(
              edge={:.2} row={:.2} ssim={:.2}",
             report.mae, report.edge_ncc, report.row_score, report.ssim
         );
-    }
-    if !report.ok() {
-        log::info!(
-            "[长截图][v2] 拒绝硬拼 mae={:.1} edge_ncc={:.2} row={:.2} ssim={:.2}",
-            report.mae, report.edge_ncc, report.row_score, report.ssim
-        );
-        return FrameDecision::VerifyFailed;
     }
     FrameDecision::Append { offset, confidence }
 }
@@ -686,8 +781,7 @@ pub fn rescue_offset(
 ) -> Option<i64> {
     let older = stitcher.rescue_baseline(1)?;
     let committed = stitcher.last_committed()?;
-    let FrameDecision::Append { offset, .. } = decide_with(older, frame, prior, line_height)
-    else {
+    let FrameDecision::Append { offset, .. } = decide_with(older, frame, prior, line_height) else {
         return None;
     };
     let effective = offset - committed;
@@ -752,7 +846,7 @@ pub fn direction_reversed(history: &[i64], offset: i64) -> bool {
 pub fn median_recent(history: &[i64], window: usize) -> i64 {
     let tail: Vec<i64> = history.iter().rev().take(window).copied().collect();
     if tail.is_empty() {
-        return 12
+        return 12;
     }
     let mut sorted = tail;
     sorted.sort_unstable();
@@ -942,10 +1036,16 @@ mod tests {
     /// row is unique enough for row matching.
     fn page(seed: u64, w: u32, h: u32) -> RgbaImage {
         use std::cell::Cell;
-        let state = Cell::new(seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+        let state = Cell::new(
+            seed.wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
+        );
         let next = || {
             let x = state.get();
-            state.set(x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+            state.set(
+                x.wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407),
+            );
             (x >> 33) as u8
         };
         let mut img = RgbaImage::new(w, h);
@@ -955,11 +1055,18 @@ mod tests {
             // multiplier would alias mod 256). Matching at the right offset
             // gives MAD≈0, any misalignment a large MAD — like text.
             let k = (y / 7) % 256;
-            let band = (k.wrapping_mul(23 + (seed % 13) as u32).wrapping_add((seed % 256) as u32 * 37) % 256) as u8;
+            let band = (k
+                .wrapping_mul(23 + (seed % 13) as u32)
+                .wrapping_add((seed % 256) as u32 * 37)
+                % 256) as u8;
             for x in 0..w {
                 let n = if x % 5 == 0 { next() / 8 } else { 0 };
                 let v = band.wrapping_add(n);
-                img.put_pixel(x, y, image::Rgba([v, v.wrapping_add(2), 255u8.wrapping_sub(v), 255]));
+                img.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([v, v.wrapping_add(2), 255u8.wrapping_sub(v), 255]),
+                );
             }
         }
         img
@@ -999,10 +1106,7 @@ mod tests {
         // never a translate of the reversed one.
         let a = page(11, 260, 400);
         let b = image::imageops::flip_vertical(&a);
-        assert!(!matches!(
-            decide(&a, &b, 12),
-            FrameDecision::Append { .. }
-        ));
+        assert!(!matches!(decide(&a, &b, 12), FrameDecision::Append { .. }));
     }
 
     #[test]
@@ -1058,10 +1162,16 @@ mod tests {
     /// against its band neighbour (a large luma jump).
     fn banded(seed: u64, w: u32, h: u32) -> RgbaImage {
         use std::cell::Cell;
-        let state = Cell::new(seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+        let state = Cell::new(
+            seed.wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
+        );
         let next = || {
             let x = state.get();
-            state.set(x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+            state.set(
+                x.wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407),
+            );
             (x >> 33) as u8
         };
         let mut img = RgbaImage::new(w, h);
@@ -1111,10 +1221,16 @@ mod tests {
     /// carries displacement information for the FFT estimator.
     fn textured(seed: u64, w: u32, h: u32) -> RgbaImage {
         use std::cell::Cell;
-        let state = Cell::new(seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+        let state = Cell::new(
+            seed.wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407),
+        );
         let next = || {
             let x = state.get();
-            state.set(x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407));
+            state.set(
+                x.wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407),
+            );
             (x >> 33) as u8
         };
         let mut img = RgbaImage::new(w, h);
@@ -1127,7 +1243,11 @@ mod tests {
             for x in 0..w {
                 let n = next() / 16;
                 let v = band.wrapping_add(n);
-                img.put_pixel(x, y, image::Rgba([v, v.wrapping_add(2), 255u8.wrapping_sub(v), 255]));
+                img.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([v, v.wrapping_add(2), 255u8.wrapping_sub(v), 255]),
+                );
             }
         }
         img
@@ -1166,6 +1286,49 @@ mod tests {
         assert!(r_good.ok(), "good: {r_good:?}");
         assert!(!r_bad.ok(), "bad: {r_bad:?}");
         assert!(r_good.ssim > r_bad.ssim);
+    }
+
+    /// The smooth-page tear, reduced from the replay corpus: wide bands of
+    /// near-uniform luma (the showcase gradients) make a ~10px-offset alias
+    /// pass every verifier gate — on real rendered frames a 240px step was
+    /// accepted as 230px with mae=6.4, and committing it duplicated 10px at
+    /// the seam. The seam stage must recover the exact offset from a ±12px
+    /// neighbourhood of a verified-but-imperfect candidate.
+    ///
+    /// Construction: a slow vertical gradient (≈0.2 luma/px — the wrong offset
+    /// keeps MAE ≈2, under every gate) plus sparse text-like marks every 64px
+    /// (edge energy per row is constant, so the edge gate's flat-signal
+    /// bypass keeps it at 1.0, exactly like the real gradient bands).
+    fn smooth_page(seed: u64, w: u32, h: u32) -> RgbaImage {
+        let mut img = RgbaImage::new(w, h);
+        for y in 0..h {
+            let base = (y as f64 * 0.2 + (seed % 5) as f64) as u8;
+            for x in 0..w {
+                let n = if x % 64 == 0 { 40 } else { 0 };
+                let v = base.wrapping_add(n);
+                img.put_pixel(x, y, image::Rgba([v, v.wrapping_add(3), 255 - v, 255]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn seam_stage_corrects_smooth_page_alias() {
+        let src = smooth_page(77, 320, 3000);
+        let a = window_of(&src, 0, 800);
+        let b = window_of(&src, 240, 800);
+        // The alias: verified and accepted at 230 (pre-seam behaviour).
+        let r = verify_alignment(&a, &b, 230);
+        assert!(r.ok(), "alias unexpectedly rejected: {r:?}");
+        assert!(
+            r.mae > SEAM_CLEAN_MAE,
+            "alias should carry residual error: {r:?}"
+        );
+        // The sweep finds the true displacement and the margin is met.
+        assert_eq!(seam_sweep(&a, &b, 230, SEAM_RADIUS), 240);
+        let r240 = verify_alignment(&a, &b, 240);
+        assert!(r240.ok());
+        assert!(r240.mae + SEAM_MARGIN < r.mae);
     }
 
     #[test]

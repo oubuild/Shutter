@@ -37,16 +37,22 @@ use crate::scroll::types::{
     OpenScroll, SaveScroll, ScrollScreenshotData, StartRecordingEvent, StartScroll,
 };
 
-/// Lines per injected wheel step (reference: 每次固定行数, with a watchdog).
-/// Positive = scroll down — the stitcher's forward direction (positive offset).
-/// `autoscroll::post_scroll` negates it for macOS's `wheel1` sign convention.
-const SCROLL_LINES: i32 = 3;
+/// Pause between injected steps (reference cadence: a frame every ~200ms).
+const STEP_INTERVAL: Duration = Duration::from_millis(200);
 
-/// Pause between injected steps: enough for a page to settle.
-const STEP_INTERVAL: Duration = Duration::from_millis(260);
+/// Gap between the two captures of the render-stability check, and between
+/// retries while the compositor is still churning (reference
+/// `render_stability` double-capture, retried until stable).
+const STABILITY_GAP: Duration = Duration::from_millis(80);
 
-/// Extra settle time after the last injection before capturing.
-const SETTLE: Duration = Duration::from_millis(160);
+/// Stability-check attempts before accepting the newest capture anyway and
+/// letting the verifier judge it (bounded so a page with a live animation
+/// cannot wedge the loop — it fails closed instead, 原地重抓 handles it).
+const MAX_STABILITY_TRIES: u32 = 6;
+
+/// Settle time on the no-scroll regrab path (reference: "wait 200ms and retry
+/// without scrolling").
+const SETTLE: Duration = Duration::from_millis(200);
 
 /// Captures of the same position attempted when alignment fails before giving
 /// up on the frame (reference: 原地重抓, bounded).
@@ -179,8 +185,14 @@ pub fn open_panel(app: &AppHandle, payload: OpenScroll) -> Result<()> {
 
     log::info!(
         "[长截图] 建面板 {label} @ {} {} {}x{} (选区 {},{} {}x{})",
-        monitor.x, monitor.y, monitor.width, monitor.height,
-        payload.x, payload.y, payload.bounds_width, payload.bounds_height,
+        monitor.x,
+        monitor.y,
+        monitor.width,
+        monitor.height,
+        payload.x,
+        payload.y,
+        payload.bounds_width,
+        payload.bounds_height,
     );
     let _win = crate::windows::layer_window(
         app,
@@ -235,7 +247,10 @@ pub fn panel_loaded(app: &AppHandle) -> Result<ScrollScreenshotData> {
     let Some(s) = guard.as_ref() else {
         return Err(anyhow!("长截图面板已关闭，请重新截图"));
     };
-    log::info!("[长截图] 面板握手完成 → 随响应回送初始数据 ({})", s.panel_label);
+    log::info!(
+        "[长截图] 面板握手完成 → 随响应回送初始数据 ({})",
+        s.panel_label
+    );
     let data = s.seeded.clone();
     drop(guard);
     // Belt and braces: a live listener (registered after the page settled)
@@ -318,7 +333,14 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
     let worker = std::thread::Builder::new()
         .name("scroll-worker".into())
         .spawn(move || {
-            worker_loop(worker_app, worker_monitor, &pixel_rect, first, worker_control, auto_scroll);
+            worker_loop(
+                worker_app,
+                worker_monitor,
+                &pixel_rect,
+                first,
+                worker_control,
+                auto_scroll,
+            );
         })
         .map_err(|e| anyhow!("启动拼接线程失败: {e}"))?;
     let session_epoch;
@@ -338,7 +360,9 @@ pub fn start(app: &AppHandle, payload: StartScroll) -> Result<()> {
     open_control_bar(app, &monitor_info)?;
     let _ = app.emit(
         "start_screen_recording_event",
-        crate::scroll::types::StartRecordingEvent { monitor_id: monitor },
+        crate::scroll::types::StartRecordingEvent {
+            monitor_id: monitor,
+        },
     );
     if !auto_scroll {
         let _ = app.emit(
@@ -398,7 +422,9 @@ pub fn bar_loaded(_app: &AppHandle) -> Option<StartRecordingEvent> {
     if let Some(s) = guard.as_ref() {
         s.control.bar_loaded.store(true, Ordering::SeqCst);
         log::info!("[长截图] 控制条握手完成 (epoch {})", s.epoch);
-        return Some(StartRecordingEvent { monitor_id: s.monitor_id });
+        return Some(StartRecordingEvent {
+            monitor_id: s.monitor_id,
+        });
     }
     None
 }
@@ -513,7 +539,11 @@ pub fn save(app: &AppHandle, payload: SaveScroll) -> Result<()> {
                 "[长截图] 已复制 ({}x{}){}",
                 image.width(),
                 image.height(),
-                if payload.auto_save_path.is_empty() { "" } else { " + 自动保存" }
+                if payload.auto_save_path.is_empty() {
+                    ""
+                } else {
+                    " + 自动保存"
+                }
             );
         }
         "saveAs" => {
@@ -636,7 +666,10 @@ fn control_stop_and_wait(control: &Arc<Control>) -> Option<Stitcher> {
 /// The `Display` must be created and used on the same thread (its inner
 /// `xcap::Monitor` is `!Send` on some platforms), so the worker resolves it
 /// once and hands it here for every frame.
-fn capture_from(display: &crate::capture::Display, rect: &crate::compose::PixelRect) -> Result<RgbaImage> {
+fn capture_from(
+    display: &crate::capture::Display,
+    rect: &crate::compose::PixelRect,
+) -> Result<RgbaImage> {
     let frame = display.capture()?;
     let (fw, fh) = frame.dimensions();
     let x = rect.x.min(fw.saturating_sub(1));
@@ -698,6 +731,77 @@ fn publish_preview(app: &AppHandle, image: &RgbaImage) {
     );
 }
 
+/// Session-diag line writer (reference `ScrollScreenshot/stitch_diag.log` +
+/// `scroll_diag::write_line`): one timestamped line per pipeline event so a
+/// failed session can be reconstructed offline — the exact artifact that made
+/// decoding the reference's behaviour possible.
+struct Diag {
+    file: Option<std::fs::File>,
+}
+
+impl Diag {
+    fn new(app: &AppHandle, auto_scroll: bool, expected: i64) -> Self {
+        let file = preview_path(app)
+            .ok()
+            .map(|p| p.with_file_name("stitch_diag.log"))
+            .and_then(|p| {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .ok()?;
+                let _ = writeln!(
+                    f,
+                    "[{}] [长截图][diag] session start auto_scroll={auto_scroll} expected={expected}",
+                    timestamp()
+                );
+                Some(f)
+            });
+        Self { file }
+    }
+
+    fn log(&mut self, line: &str) {
+        use std::io::Write;
+        if let Some(f) = self.file.as_mut() {
+            let _ = writeln!(f, "[{}] [长截图][diag] {line}", timestamp());
+        }
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS` in local time (the reference's log stamp format).
+fn timestamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Capture after the compositor has settled: two captures `STABILITY_GAP`
+/// apart must agree (reference `render_stability` — `stable=true` gates every
+/// frame of its pipeline). A frame grabbed mid-smooth-scroll sits at a
+/// fractional offset with anti-aliasing noise across the whole page; the
+/// verifier rightly refuses it, and refusing frame after frame is exactly the
+/// "拼接失败" failure mode. Waiting for agreement instead of a fixed sleep is
+/// what makes 20px steps verifiable at mae≈0.
+fn capture_stable(
+    display: &crate::capture::Display,
+    rect: &crate::compose::PixelRect,
+    diag: &mut Diag,
+) -> Result<RgbaImage> {
+    let mut a = capture_from(display, rect)?;
+    for _ in 0..MAX_STABILITY_TRIES {
+        std::thread::sleep(STABILITY_GAP);
+        let b = capture_from(display, rect)?;
+        if crate::scroll::pipeline::looks_still(&a, &b) {
+            diag.log("render_stability stable=true");
+            return Ok(b);
+        }
+        diag.log("render_stability stable=false → 复采");
+        a = b;
+    }
+    log::warn!("[长截图] 页面渲染未稳定，交给校验器裁决");
+    diag.log("render_stability unstable_after_max_tries");
+    Ok(a)
+}
+
 /// The worker loop: (wait for hover) → inject → settle → capture → decide →
 /// append/reject.
 ///
@@ -730,8 +834,11 @@ fn worker_loop(
     };
 
     // Global logical rect (display points) for the hover gate.
-    let (origin_x, origin_y, scale) =
-        (monitor_info.x as f64, monitor_info.y as f64, monitor_info.scale_factor);
+    let (origin_x, origin_y, scale) = (
+        monitor_info.x as f64,
+        monitor_info.y as f64,
+        monitor_info.scale_factor,
+    );
     let sel_global = (
         origin_x + rect.x as f64 / scale,
         origin_y + rect.y as f64 / scale,
@@ -755,6 +862,13 @@ fn worker_loop(
     // Signature height for the whole session, picked from the first capture
     // (reference `preprocess::set_line_height` caches one value per page).
     let line_height = choose_line_height(stitcher.last_frame());
+    // The expected per-frame displacement in physical px (reference
+    // `frame_expected=Some(20)` = |point_delta| × scale_factor): a 10pt
+    // injected step at this monitor's scale. In manual mode there is no
+    // expectation and the prior falls back to the median of recent offsets.
+    let expected_px =
+        ((crate::scroll::autoscroll::SCROLL_STEP_POINTS as f64) * scale).round() as i64;
+    let mut diag_log = Diag::new(&app, auto_scroll, expected_px);
     let mut auto = auto_scroll;
     let mut armed = auto_scroll;
     let mut paused_by_user = false;
@@ -768,7 +882,7 @@ fn worker_loop(
 
     let mut consecutive_rejects: u32 = 0;
     let mut bottom_stills: u32 = 0;
-    let mut diag_seq: u32 = 0;
+    let mut frame_id: u32 = 0;
 
     'outer: while !control.stop.load(Ordering::SeqCst) {
         if control.pause.load(Ordering::SeqCst) {
@@ -803,23 +917,28 @@ fn worker_loop(
             }
         }
 
-        // 1. Inject one wheel step and let the page settle.
+        // 1. Inject one wheel step, then wait out the reference cadence.
         if auto {
-            if !crate::scroll::autoscroll::post_scroll(SCROLL_LINES) {
+            if !crate::scroll::autoscroll::post_scroll(
+                crate::scroll::autoscroll::SCROLL_STEP_POINTS,
+            ) {
                 // Injection broke mid-session (permission revoked): degrade to
                 // manual scrolling permanently (reference 自动滚动注入失败).
                 auto = false;
                 log::warn!("[长截图] 自动滚动注入失败 → 请手动滚动页面");
+                diag_log.log("inject_failed → 手动滚动");
                 let _ = app.emit(
                     "scroll_screenshot_error",
                     serde_json::json!({ "message": "自动滚动已停止，请手动滚动页面" }),
                 );
             }
         }
-        std::thread::sleep(STEP_INTERVAL + SETTLE);
+        std::thread::sleep(STEP_INTERVAL);
 
-        // 2. Capture.
-        let frame = match capture_from(&display, rect) {
+        // 2. Capture — but only once the page has stopped rendering (the
+        // reference's render_stability double-capture; see capture_stable).
+        frame_id += 1;
+        let frame = match capture_stable(&display, rect, &mut diag_log) {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("[长截图] 抓取失败: {e:#}");
@@ -830,21 +949,28 @@ fn worker_loop(
         if diag {
             if let Ok(dir) = crate::settings::app_dir().map(|d| d.join("scroll").join("diag")) {
                 let _ = std::fs::create_dir_all(&dir);
-                diag_seq += 1;
-                let _ = frame.save(dir.join(format!("frame-{diag_seq:04}.png")));
+                let _ = frame.save(dir.join(format!("frame-{frame_id:04}.png")));
             }
         }
 
-        // 3. Decide.
-        let prior = median_recent(stitcher.history(), 5);
+        // 3. Decide. Auto mode KNOWS what offset to expect (the injected
+        // step × scale); the reference searches around `target_px` and logs
+        // `near_prior=true` on every accepted frame.
+        let prior = if auto {
+            expected_px
+        } else {
+            median_recent(stitcher.history(), 5)
+        };
         let decision = decide_with(stitcher.last_frame(), &frame, prior, line_height);
 
         match decision {
             FrameDecision::Still => {
                 bottom_stills += 1;
                 log::info!("[长截图] 页面几乎未滚动 → 本帧不追加");
+                diag_log.log("frame no_movement — 保留累计图，不能据此断定滚动边界");
                 if should_stop_at_bottom(auto, bottom_stills) {
                     log::info!("[长截图] 已到达页面底部 → 停止捕获");
+                    diag_log.log("bottom_reached → 停止捕获");
                     let _ = app.emit("scroll_screenshot_click_stop", ());
                     let _ = app.emit("scroll_screenshot_pause_state", true);
                     break 'outer;
@@ -855,6 +981,7 @@ fn worker_loop(
                 consecutive_rejects = 0;
                 if direction_reversed(stitcher.history(), offset) {
                     log::info!("[长截图] 检测到滚动方向反转 → 已拦截本次滚动 → 保留当前结果并暂停");
+                    diag_log.log("direction_reversal → 已拦截本次滚动");
                     control.pause.store(true, Ordering::SeqCst);
                     let _ = app.emit("scroll_screenshot_pause_state", true);
                     let _ = app.emit(
@@ -863,7 +990,13 @@ fn worker_loop(
                     );
                     continue;
                 }
+                let before_h = stitcher.height();
                 let added = stitcher.append(frame, &decision, offset);
+                diag_log.log(&format!(
+                    "frame stitch_ok frame_id={frame_id} offset={offset} expected={expected_px} \
+                     append={added} before_h={before_h} after_h={}",
+                    stitcher.height()
+                ));
                 if added > 0 {
                     publish_preview(&app, stitcher.last_frame());
                 }
@@ -880,6 +1013,7 @@ fn worker_loop(
             }
             FrameDecision::Reversed => {
                 log::info!("[长截图] 检测到滚动方向反转 → 已拦截本次滚动");
+                diag_log.log("frame reversed → 已拦截本次滚动");
                 control.pause.store(true, Ordering::SeqCst);
                 let _ = app.emit("scroll_screenshot_pause_state", true);
             }
@@ -893,6 +1027,9 @@ fn worker_loop(
                 // before anything is appended.
                 if let Some(offset) = rescue_offset(&stitcher, &frame, prior, line_height) {
                     log::info!("[长截图][v2] 旧基线救援成功 offset={offset}");
+                    diag_log.log(&format!(
+                        "rescue_ok frame_id={frame_id} offset={offset} expected={expected_px}"
+                    ));
                     let added = stitcher.append(
                         frame,
                         &FrameDecision::Append {
@@ -908,18 +1045,23 @@ fn worker_loop(
                     bottom_stills = 0;
                     continue 'outer;
                 }
-                // 原地重抓: the page may still be animating; re-capture the
-                // same position and retry a bounded number of times.
+                // 原地重抓 (reference "capture rejected_or_still — wait 200ms
+                // and retry without scrolling"): the page may still be
+                // animating; re-capture the same position and retry a bounded
+                // number of times.
                 let reason = match &decision {
                     FrameDecision::TooLarge => "位移过大",
                     FrameDecision::LowConfidence => "位移置信度不足",
                     _ => "横向分区未形成一致画面",
                 };
                 log::info!("[长截图][重抓] {reason} → 原地重抓");
+                diag_log.log(&format!(
+                    "capture rejected ({reason}) → 原地重抓 frame_id={frame_id}"
+                ));
                 let mut accepted = false;
                 for _ in 0..MAX_REGRAB {
                     std::thread::sleep(SETTLE);
-                    let Ok(retry) = capture_from(&display, rect) else {
+                    let Ok(retry) = capture_stable(&display, rect, &mut diag_log) else {
                         continue;
                     };
                     let d2 = decide_with(stitcher.last_frame(), &retry, prior, line_height);

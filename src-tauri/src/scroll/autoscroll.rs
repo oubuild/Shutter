@@ -26,30 +26,38 @@ pub enum InjectCapability {
     Unsupported,
 }
 
+/// Scroll distance per injected step, in display points (reference
+/// `auto_scroll`'s hardcoded `10.0`, confirmed by its runtime log
+/// `macOS point_delta=-10.00 scale_factor=2.00 frame_expected=Some(20)` and
+/// by `pixel_scroll`'s disassembly: `kCGScrollEventUnitPixel`, `wheel1 =
+/// -delta`). POINT units — not LINES: a "line" is app-defined (Chrome maps one
+/// to ~40px and animates it), so the step would be neither small nor
+/// deterministic, while 10pt keeps consecutive overlaps pixel-identical (the
+/// reference's verifier runs at mae=0.0 on every frame) and lets the pipeline
+/// expect the offset: `expected_px = SCROLL_STEP_POINTS × scale_factor`.
+pub const SCROLL_STEP_POINTS: i32 = 10;
+
 #[cfg(target_os = "macos")]
 pub mod imp {
     use super::InjectCapability;
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
     use core_graphics::event::{
-        CallbackResult, CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions,
-        CGEventTapPlacement, CGEventType, EventField, ScrollEventUnit,
+        CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+        CGEventType, CallbackResult, EventField, ScrollEventUnit,
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// A posted event carries the "event source state id" of its source; our
-    /// injected events use HIDSystemState just like real hardware, so the
-    /// discriminator is a timestamp window recorded at post time.
-    static LAST_INJECTED_AT_MS: AtomicI64 = AtomicI64::new(0);
-
-    fn now_ms() -> i64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
-    }
+    /// The reference tags every injected scroll event with this sentinel in
+    /// `kCGEventSourceUserData`-adjacent field 42 (`set_integer_value_field(ev,
+    /// 42, 0x12345678)` in `pixel_scroll`), so its listener distinguishes
+    /// injections from the user's real wheel by VALUE, not by post-time
+    /// proximity — robust against delayed delivery and slow wheel callbacks.
+    const INJECTED_EVENT_TAG: i64 = 0x1234_5678;
+    /// `EventField::EVENT_SOURCE_USER_DATA` (= 42), spelled as its raw value
+    /// because the crate's field constants are plain `u32`s, not the enum.
+    const INJECTED_EVENT_TAG_FIELD: u32 = 42;
 
     // `kind = "framework"`: the plain dylib lookup fails because
     // ApplicationServices re-exports the symbol from HIServices; the framework
@@ -70,40 +78,33 @@ pub mod imp {
         }
     }
 
-    /// Post one scroll-wheel step of `lines` lines at the current pointer
-    /// location (reference: `CGEventCreateScrollWheelEvent2` + `CGEventPost`).
+    /// Post one scroll-wheel step of `points` display points at the current
+    /// pointer location — a 1:1 port of the reference's `pixel_scroll`:
+    /// `CGEventCreateScrollWheelEvent2(HIDSystemState, kCGScrollEventUnitPixel,
+    /// 1, -points, 0, 0)`, tagged `INJECTED_EVENT_TAG`, posted to the HID tap.
     /// Returns false when event creation failed (`创建滚动事件失败`).
     ///
-    /// `lines` is positive for scrolling DOWN (revealing content below), the
+    /// `points` is positive for scrolling DOWN (revealing content below), the
     /// direction the stitcher expects (positive offset). macOS's `wheel1` sign
     /// is the opposite — a positive `wheel1` scrolls UP — so the sign is
     /// negated here; without it the page scrolls backwards and the pipeline
     /// sees a negative offset it rejects as 方向反转.
-    pub fn post_scroll(lines: i32) -> bool {
+    ///
+    /// Callers pass [`SCROLL_STEP_POINTS`]; the pipeline's expected offset is
+    /// `SCROLL_STEP_POINTS × scale_factor` (reference `frame_expected`).
+    pub fn post_scroll(points: i32) -> bool {
         let Ok(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else {
             log::warn!("[长截图] 创建事件源失败");
             return false;
         };
-        let Ok(event) = CGEvent::new_scroll_event(
-            source,
-            ScrollEventUnit::LINE,
-            1,
-            -lines,
-            0,
-            0,
-        ) else {
+        let Ok(event) = CGEvent::new_scroll_event(source, ScrollEventUnit::PIXEL, 1, -points, 0, 0)
+        else {
             log::warn!("[长截图] 创建滚动事件失败");
             return false;
         };
-        LAST_INJECTED_AT_MS.store(now_ms(), Ordering::SeqCst);
+        event.set_integer_value_field(INJECTED_EVENT_TAG_FIELD, INJECTED_EVENT_TAG);
         event.post(CGEventTapLocation::HID);
         true
-    }
-
-    /// Was an injected event posted within the last `window_ms`?
-    fn just_injected(window_ms: i64) -> bool {
-        let at = LAST_INJECTED_AT_MS.load(Ordering::SeqCst);
-        at != 0 && now_ms() - at <= window_ms
     }
 
     /// Shared listener state: the thread writes, the session drains.
@@ -122,33 +123,35 @@ pub mod imp {
     }
 
     impl ScrollListener {
-    /// Start an Active tap on ScrollWheel events.
-    ///
-    /// Injected events (posted within a few ms by us) are ignored; only
-    /// genuine user wheel motion accumulates. Returns `None` when the tap
-    /// cannot be created (no Accessibility grant — degrades to no
-    /// manual-pause detection; see the module comment for why Active and
-    /// not ListenOnly).
-    pub fn start() -> Option<Self> {
-        let shared = Arc::new(ListenerShared::default());
+        /// Start an Active tap on ScrollWheel events.
+        ///
+        /// Injected events (posted within a few ms by us) are ignored; only
+        /// genuine user wheel motion accumulates. Returns `None` when the tap
+        /// cannot be created (no Accessibility grant — degrades to no
+        /// manual-pause detection; see the module comment for why Active and
+        /// not ListenOnly).
+        pub fn start() -> Option<Self> {
+            let shared = Arc::new(ListenerShared::default());
 
-        // CGEventTap::new_unchecked is unsafe for a reason: the callback
-        // must live as long as the tap. Leak one Arc for 'static and keep
-        // another in this handle so Drop can flip the stop flag.
-        let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared).into());
-        let thread = std::thread::Builder::new()
-            .name("scroll-listener".into())
-            .spawn(move || {
-                let tap = unsafe {
-                    CGEventTap::new_unchecked(
-                        CGEventTapLocation::Session,
-                        CGEventTapPlacement::HeadInsertEventTap,
-                        CGEventTapOptions::Default,
-                        vec![CGEventType::ScrollWheel],
+            // CGEventTap::new_unchecked is unsafe for a reason: the callback
+            // must live as long as the tap. Leak one Arc for 'static and keep
+            // another in this handle so Drop can flip the stop flag.
+            let leaked: &'static ListenerShared = Box::leak(Arc::clone(&shared).into());
+            let thread = std::thread::Builder::new()
+                .name("scroll-listener".into())
+                .spawn(move || {
+                    let tap = unsafe {
+                        CGEventTap::new_unchecked(
+                            CGEventTapLocation::Session,
+                            CGEventTapPlacement::HeadInsertEventTap,
+                            CGEventTapOptions::Default,
+                            vec![CGEventType::ScrollWheel],
                             |_proxy, _etype, event: &CGEvent| {
-                                // Our own injections arrive within a few ms of
-                                // the post; treat those as noise.
-                                if just_injected(8) {
+                                // Injections carry the sentinel tag (reference
+                                // parity); the user's real wheel never does.
+                                if event.get_integer_value_field(INJECTED_EVENT_TAG_FIELD)
+                                    == INJECTED_EVENT_TAG
+                                {
                                     return CallbackResult::Keep;
                                 }
                                 let dy = event.get_integer_value_field(
@@ -192,10 +195,7 @@ pub mod imp {
                 return None;
             }
             log::info!("[长截图] 滚动监听器启动");
-            Some(Self {
-                shared,
-                thread,
-            })
+            Some(Self { shared, thread })
         }
 
         /// Net user wheel lines since the previous drain.
