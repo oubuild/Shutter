@@ -365,7 +365,7 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <div class="hero-badge"><b class="js-version">v0.8.2</b> · 开源免费 · macOS / Windows / Linux</div>
+    <div class="hero-badge"><b class="js-version">v0.8.3</b> · 开源免费 · macOS / Windows / Linux</div>
     <h1>截图，<span class="grad">然后交给 AI</span></h1>
     <p class="hero-sub">
       Shutter 是住在菜单栏里的截图工具：框选即截、点击选中窗口、滚动长截图、贴图钉在桌面，
@@ -475,7 +475,7 @@
   <div class="wrap center">
     <div class="kicker">Download</div>
     <h2>下载 Shutter</h2>
-    <p class="section-sub">当前版本 <span class="js-version">v0.8.2</span> · 支持 macOS / Windows / Linux。<a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary); font-size: 12.5px;">查看全部历史版本</a> 。</p>
+    <p class="section-sub">当前版本 <span class="js-version">v0.8.3</span> · 支持 macOS / Windows / Linux。<a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary); font-size: 12.5px;">查看全部历史版本</a> 。</p>
 
     <div class="dl-source" id="dl-source" role="radiogroup" aria-label="选择下载源">
       <span class="dl-source-thumb" id="dl-source-thumb" aria-hidden="true"></span>
@@ -588,7 +588,7 @@
 <script>
   // 下载区：从 GitHub Releases 读最新版本号，为每个平台/格式的下载条目
   // 生成直链，并支持在 GitHub 与 CNB 镜像两个源之间切换。API 拉不到时
-  // （限流/离线）用 HTML 里的 v0.8.2 兜底，页面照常可用。
+  // （限流/离线）用 HTML 里的 v0.8.3 兜底，页面照常可用。
   //
   // 切换源只换域名：github.com/oubuild/Shutter ↔ cnb.cool/ryanuo/shutter，
   // 文件路径结构完全一致。
@@ -597,8 +597,8 @@
   const CNB_BASE = "https://cnb.cool/" + CNB_REPO + "/-/releases/download";
 
   // 版本号状态：默认 HTML 兜底值，API 拉到后覆盖。
-  let dlTag = "v0.8.2";    // 带 v 前缀
-  let dlVersion = "0.8.2"; // 无前缀，用于拼文件名
+  let dlTag = "v0.8.3";    // 带 v 前缀
+  let dlVersion = "0.8.3"; // 无前缀，用于拼文件名
 
   // 当前下载源：默认 GitHub，用户选择后写入 localStorage。
   let dlSource = "github";
