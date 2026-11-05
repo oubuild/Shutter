@@ -17,3 +17,6 @@ report/
 public/showcase-bg.svg
 public/showcase-wallpaper.png
 public/showcase-wallpaper-src.png
+
+# 本地长截图管线离线调试探针（不随发版入仓库）
+/src-tauri/examples/

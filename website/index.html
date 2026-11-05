@@ -365,7 +365,7 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <div class="hero-badge"><b class="js-version">v0.7.2</b> · 开源免费 · macOS / Windows / Linux</div>
+    <div class="hero-badge"><b class="js-version">v0.8.2</b> · 开源免费 · macOS / Windows / Linux</div>
     <h1>截图，<span class="grad">然后交给 AI</span></h1>
     <p class="hero-sub">
       Shutter 是住在菜单栏里的截图工具：框选即截、点击选中窗口、滚动长截图、贴图钉在桌面，
@@ -384,12 +384,10 @@
     <p class="hero-note">无需注册 · 无账号 · 安装即用</p>
 
     <div class="hero-shot">
-      <!-- 待补截图：assets/hero-ai.webp
-           尺寸 1760×1100（16:10，对应首屏 880px 逻辑宽的 2x）
-           内容：框选一张普通网页或文档后，AI 面板给出「提取文字」或「翻译」的正向结果
-           禁止：GitHub release notes 这类自指内容；不要露出「回复建议」那一格（会显示“无法代写回复”）
-           共同要求：同一机型、同一主题；不要 macOS 菜单栏残片、桌面阴影、滚动条残边；窗口宽度 1200–1400 -->
-      <img src="assets/hero-ai.webp" alt="Shutter 截取网页后由 AI 提取文字" loading="eager" fetchpriority="high" decoding="async" width="1760" height="1021"
+      <!-- 实拍：assets/hero-ai.webp（1760×1021）
+           内容：桌面壁纸上框选一大片区域，底部标注工具栏，中间取色放大镜显示 #E2E5F6
+           要求：同一机型、同一主题；不要 macOS 菜单栏残片、桌面阴影、滚动条残边 -->
+      <img src="assets/hero-ai.webp" alt="Shutter 框选桌面时显示标注工具栏与取色放大镜" loading="eager" fetchpriority="high" decoding="async" width="1760" height="1021"
            onerror="this.style.visibility='hidden'" />
     </div>
   </div>
@@ -440,8 +438,8 @@
     <div class="ai-grid">
       <div class="ai-shot">
         <!-- 截图：assets/ai-chat.webp（1400×1050 / 4:3）
-             内容：AI 助手双栏布局——左侧源截图预览，右侧「翻译」结果卡片，顶部标签页，底部提问输入框 -->
-        <img src="assets/ai-chat.webp" alt="Shutter AI 助手：截取聊天对话后翻译成英文" loading="lazy" decoding="async" width="1400" height="1050"
+             内容：AI 助手上下布局——上方源截图预览，下方「翻译」结果卡片，顶部标签页，底部提问输入框 -->
+        <img src="assets/ai-chat.webp" alt="Shutter AI 助手：上方源截图预览、下方翻译结果，截取聊天对话后直接翻译成英文" loading="lazy" decoding="async" width="1400" height="1050"
              onerror="this.style.visibility='hidden'" />
       </div>
       <div>
@@ -477,7 +475,7 @@
   <div class="wrap center">
     <div class="kicker">Download</div>
     <h2>下载 Shutter</h2>
-    <p class="section-sub">当前版本 <span class="js-version">v0.7.2</span> · 支持 macOS / Windows / Linux。<a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary); font-size: 12.5px;">查看全部历史版本</a> 。</p>
+    <p class="section-sub">当前版本 <span class="js-version">v0.8.2</span> · 支持 macOS / Windows / Linux。<a href="https://github.com/oubuild/Shutter/releases" target="_blank" rel="noopener" style="color: var(--primary); font-size: 12.5px;">查看全部历史版本</a> 。</p>
 
     <div class="dl-source" id="dl-source" role="radiogroup" aria-label="选择下载源">
       <span class="dl-source-thumb" id="dl-source-thumb" aria-hidden="true"></span>
@@ -590,7 +588,7 @@
 <script>
   // 下载区：从 GitHub Releases 读最新版本号，为每个平台/格式的下载条目
   // 生成直链，并支持在 GitHub 与 CNB 镜像两个源之间切换。API 拉不到时
-  // （限流/离线）用 HTML 里的 v0.7.2 兜底，页面照常可用。
+  // （限流/离线）用 HTML 里的 v0.8.2 兜底，页面照常可用。
   //
   // 切换源只换域名：github.com/oubuild/Shutter ↔ cnb.cool/ryanuo/shutter，
   // 文件路径结构完全一致。
@@ -599,8 +597,8 @@
   const CNB_BASE = "https://cnb.cool/" + CNB_REPO + "/-/releases/download";
 
   // 版本号状态：默认 HTML 兜底值，API 拉到后覆盖。
-  let dlTag = "v0.7.2";    // 带 v 前缀
-  let dlVersion = "0.7.2"; // 无前缀，用于拼文件名
+  let dlTag = "v0.8.2";    // 带 v 前缀
+  let dlVersion = "0.8.2"; // 无前缀，用于拼文件名
 
   // 当前下载源：默认 GitHub，用户选择后写入 localStorage。
   let dlSource = "github";
