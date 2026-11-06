@@ -124,14 +124,14 @@ const AI_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
   { id: "ask", label: "提问" },
 ];
 
-/** Output actions. Copy keeps the plain icon style like every other button,
- *  matching the reference bar (no filled primary control). 长截图 sits first
- *  in this group, as in the reference bar (长截图(C)/贴图(R)/保存/复制). */
+/** Output actions. 长截图 sits first in this group, as in the reference bar
+ *  (长截图(C)/贴图(R)/保存/复制). 复制 carries the reference's check icon
+ *  (`icon-Check_Tools_Outlined`): the checkmark means 确认并复制到剪贴板. */
 const OUT_ACTIONS: Array<{ id: ToolbarAction; label: string; key?: string }> = [
   { id: "scroll", label: "长截图", key: "C" },
   { id: "pin", label: "贴图", key: "R" },
   { id: "save", label: "保存", key: "⌘S" },
-  { id: "copy", label: "复制", key: "⏎" },
+  { id: "copy", label: "确认并复制", key: "⏎" },
 ];
 
 /** Tools that own a parameter bubble, and how it is composed (reference `pi()`). */
@@ -833,8 +833,8 @@ const ICONS: Record<string, string> = {
   ),
   pin: S('<path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/>'),
   save: S('<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4 18h16"/>'),
-  copy: S(
-    '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
-  ),
+  // 复制到剪贴板用对号图标（reference `icon-Check_Tools_Outlined`）：对号 =
+  // 确认选区并写入剪贴板，与 Enter 快捷键同一语义（确认并复制）。
+  copy: S('<path d="M20 6 9 17l-5-5"/>'),
   cancel: S('<path d="M6 6l12 12M18 6 6 18"/>'),
 };

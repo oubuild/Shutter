@@ -43,8 +43,9 @@ const ICONS = {
   pause: '<rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/>',
   download: '<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4 18h16"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
-  check:
-    '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
+  // 保存（复制到剪贴板）用对号图标（reference `icon-Check_Tools_Outlined`）：
+  // 对号 = 确认本次长截图并写入剪贴板。
+  check: '<path d="M20 6 9 17l-5-5"/>',
 };
 
 /** `xw_YYYYMMDDHHmmss.png` (reference save name). */
@@ -227,7 +228,7 @@ export function ScrollRenderBar() {
           <div className="scrollbar-btn" title="关闭" onClick={close}>
             <Icon paths={ICONS.close} />
           </div>
-          <div className="scrollbar-btn" title="保存" onClick={() => void onSaveCopy()}>
+          <div className="scrollbar-btn" title="确认并复制" onClick={() => void onSaveCopy()}>
             <Icon paths={ICONS.check} />
           </div>
         </div>

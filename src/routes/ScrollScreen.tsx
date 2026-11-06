@@ -273,8 +273,9 @@ const ICONS = {
   play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>',
   download: '<path d="M12 4v10"/><path d="M8 10l4 4 4-4"/><path d="M4 18h16"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
-  check:
-    '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
+  // 保存（复制到剪贴板）用对号图标（reference `icon-Check_Tools_Outlined`）：
+  // 对号 = 确认本次长截图并写入剪贴板。
+  check: '<path d="M20 6 9 17l-5-5"/>',
 };
 
 /* ------------------------------------------------------- selection frame */
@@ -947,7 +948,7 @@ export function ScrollScreen() {
   const barButtons: BarButton[] = [
     { id: "download", title: "下载", icon: ICONS.download, onClick: () => void onSaveAs() },
     { id: "close", title: "关闭", icon: ICONS.close, onClick: () => { cancelArm(); quit(); } },
-    { id: "check", title: "保存", icon: ICONS.check, onClick: () => void onSaveCopy() },
+    { id: "check", title: "确认并复制", icon: ICONS.check, onClick: () => void onSaveCopy() },
   ];
 
   if (size.w <= 0) return null;
