@@ -12,6 +12,12 @@ export const IS_MAC = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 /** Matches `types::default_capture_shortcut()` in Rust. */
 export const defaultCaptureShortcut = "CmdOrControl+Shift+KeyA";
 
+/** Matches `types::default_scroll_shortcut()` in Rust. */
+export const defaultScrollShortcut = "CmdOrControl+Shift+KeyL";
+
+/** Matches `types::default_pin_shortcut()` in Rust. */
+export const defaultPinShortcut = "CmdOrControl+Shift+KeyR";
+
 /** `KeyA` → `A`, `Digit1` → `1`, `Escape` → `Esc`, … */
 const KEY_LABELS: Record<string, string> = {
   Enter: "↩",
@@ -134,10 +140,12 @@ export function acceleratorFromEvent(event: KeyboardEvent): AcceleratorResult {
   if (mods.includes("CmdOrControl") && mods.includes("Control")) {
     mods.splice(mods.indexOf("Control"), 1);
   }
-  // A single modifier is not enough for a global hotkey: ⌘1 or ⌘A would
-  // shadow an ordinary app shortcut system-wide.
-  if (mods.length < 2) {
-    return { ok: false, error: "全局快捷键需要至少两个修饰键（如 ⌘⇧）" };
+  // A bare key would fire while the user types in any app, so at least one
+  // modifier is required — but ONE is enough (the reference presets include
+  // single-modifier combos like Option+R); demanding two made every binding
+  // a three-key chord for no safety gain.
+  if (mods.length < 1) {
+    return { ok: false, error: "需要至少一个修饰键（⌘ / ⌃ / ⌥ / ⇧）" };
   }
 
   const accel = [...mods, code].join("+");

@@ -7,7 +7,13 @@ import {
   type Preset,
   type Settings,
 } from "../lib/ipc";
-import { IS_MAC, formatAccelerator, defaultCaptureShortcut } from "../lib/shortcut";
+import {
+  IS_MAC,
+  formatAccelerator,
+  defaultCaptureShortcut,
+  defaultScrollShortcut,
+  defaultPinShortcut,
+} from "../lib/shortcut";
 import { Confirm } from "../components/Confirm";
 import {
   IconAlert,
@@ -100,6 +106,8 @@ function sameSettings(a: Settings, b: Settings): boolean {
     a.autoSave === b.autoSave &&
     a.copyAfterCapture === b.copyAfterCapture &&
     a.captureShortcut === b.captureShortcut &&
+    a.scrollShortcut === b.scrollShortcut &&
+    a.pinShortcut === b.pinShortcut &&
     (a.updateSource ?? "cnb") === (b.updateSource ?? "cnb") &&
     (a.ocrProvider ?? "system") === (b.ocrProvider ?? "system")
   );
@@ -237,7 +245,11 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
   const dirty = useMemo(() => {
     if (!form || !initial) return false;
     if (section === "shortcuts") {
-      return form.captureShortcut.trim() !== initial.captureShortcut.trim();
+      return (
+        form.captureShortcut.trim() !== initial.captureShortcut.trim() ||
+        form.scrollShortcut.trim() !== initial.scrollShortcut.trim() ||
+        form.pinShortcut.trim() !== initial.pinShortcut.trim()
+      );
     }
     if (section === "general") {
       return (
@@ -295,6 +307,8 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
         model: values.model.trim(),
         translateLang: values.translateLang.trim(),
         captureShortcut: values.captureShortcut.trim(),
+        scrollShortcut: values.scrollShortcut.trim(),
+        pinShortcut: values.pinShortcut.trim(),
         // Empty means "use the default"; the backend models that as null.
         saveDir: values.saveDir?.trim() ? values.saveDir.trim() : null,
       };
@@ -817,32 +831,55 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                   <section className="flex flex-col gap-4" data-testid="pref-card" aria-label="全局热键">
                     <div className="pref-group-title pl-0">全局热键</div>
 
-                    <div className="flex items-center justify-between gap-6">
-                      <div className="min-w-0">
-                        <div className="text-[13px] font-500 color-base">开始截图</div>
-                        <div className="mt-0.5 text-mini leading-relaxed color-faint">
-                          在任何应用程序前台时均可按下此热键触发选区截图
+                    {(
+                      [
+                        {
+                          key: "captureShortcut" as const,
+                          title: "开始截图",
+                          desc: "在任何应用程序前台时均可按下此热键触发选区截图",
+                          fallback: defaultCaptureShortcut,
+                        },
+                        {
+                          key: "scrollShortcut" as const,
+                          title: "长截图",
+                          desc: "按下后框选区域，松开鼠标即自动开始滚动截图",
+                          fallback: defaultScrollShortcut,
+                        },
+                        {
+                          key: "pinShortcut" as const,
+                          title: "贴图",
+                          desc: "按下后框选区域，松开鼠标即自动钉在桌面上",
+                          fallback: defaultPinShortcut,
+                        },
+                      ] as const
+                    ).map((row) => (
+                      <div key={row.key} className="flex items-center justify-between gap-6">
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-500 color-base">{row.title}</div>
+                          <div className="mt-0.5 text-mini leading-relaxed color-faint">
+                            {row.desc}
+                          </div>
+                        </div>
+                        <div className="flex flex-none items-center gap-2.5">
+                          <ShortcutRecorder
+                            value={form[row.key]}
+                            disabled={saving}
+                            onChange={(accel) => update(row.key, accel)}
+                            onRecordingChange={setRecordingShortcut}
+                          />
+                          <button
+                            type="button"
+                            className="rounded px-1 py-1 text-mini color-faint transition-colors hover:color-primary-600"
+                            title={`恢复为默认 ${formatAccelerator(row.fallback)}`}
+                            onClick={() => update(row.key, row.fallback)}
+                          >
+                            恢复默认
+                          </button>
                         </div>
                       </div>
-                      <div className="flex flex-none items-center gap-2.5">
-                        <ShortcutRecorder
-                          value={form.captureShortcut}
-                          disabled={saving}
-                          onChange={(accel) => update("captureShortcut", accel)}
-                          onRecordingChange={setRecordingShortcut}
-                        />
-                        <button
-                          type="button"
-                          className="rounded px-1 py-1 text-mini color-faint transition-colors hover:color-primary-600"
-                          title={`恢复为默认 ${formatAccelerator(defaultCaptureShortcut)}`}
-                          onClick={() => update("captureShortcut", defaultCaptureShortcut)}
-                        >
-                          恢复默认
-                        </button>
-                      </div>
-                    </div>
+                    ))}
                     <p className="app-hint">
-                      点击热键框后按下新的快捷组合键；按 Esc 退出录制。保存时向系统重新注册。
+                      点击热键框后按下新的快捷组合键；按 Esc 退出录制，清空并保存可停用该热键。保存时向系统重新注册。
                     </p>
                   </section>
 
@@ -860,6 +897,11 @@ export function SettingsView({ section, active = true, headerless = false }: Pro
                         ["Esc", "取消截图"],
                         [IS_MAC ? "⌘Z" : "Ctrl+Z", "撤销标注"],
                         ["1 – 9", "切换工具"],
+                        ["C", "长截图"],
+                        ["R", "贴图"],
+                        ["T", "提取文字"],
+                        ["F", "翻译"],
+                        ["J", "解释"],
                       ].map(([k, label]) => (
                         <div
                           key={k}

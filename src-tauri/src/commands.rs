@@ -516,12 +516,12 @@ pub fn save_settings_cmd(app: AppHandle, mut settings: Settings) -> std::result:
     settings.api_key = previous.api_key.clone();
     settings::save_settings(&settings).map_err(|e| format!("{e:#}"))?;
 
-    // A hotkey only takes effect once the OS accepts it. If the new
+    // Hotkeys only take effect once the OS accepts them. If any new
     // accelerator is invalid or already owned by another app, roll the file
     // back so the stored settings always describe the live registration.
-    if let Err(e) = crate::register_capture_hotkey(&app, &settings.capture_shortcut) {
+    if let Err(e) = crate::register_hotkeys(&app, &settings) {
         let _ = settings::save_settings(&previous);
-        let _ = crate::register_capture_hotkey(&app, &previous.capture_shortcut);
+        let _ = crate::register_hotkeys(&app, &previous);
         return Err(e);
     }
     // The tray row shows the accelerator; repaint it after a rebind.

@@ -180,6 +180,14 @@ pub struct Settings {
     /// through `save_settings_cmd`, which re-registers it.
     #[serde(default = "default_capture_shortcut")]
     pub capture_shortcut: String,
+    /// Global 长截图 hotkey: boots the overlay in scroll mode, so framing a
+    /// selection starts the scroll session directly. Empty disables it.
+    #[serde(default = "default_scroll_shortcut")]
+    pub scroll_shortcut: String,
+    /// Global 贴图 hotkey: boots the overlay in pin mode, so framing a
+    /// selection pins it straight away. Empty disables it.
+    #[serde(default = "default_pin_shortcut")]
+    pub pin_shortcut: String,
     /// Where "check for updates" downloads installers from: the CNB mirror
     /// (default, mainland-friendly) or GitHub Releases.
     #[serde(default = "default_update_source")]
@@ -206,6 +214,14 @@ pub fn default_capture_shortcut() -> String {
     "CmdOrControl+Shift+KeyA".into()
 }
 
+pub fn default_scroll_shortcut() -> String {
+    "CmdOrControl+Shift+KeyL".into()
+}
+
+pub fn default_pin_shortcut() -> String {
+    "CmdOrControl+Shift+KeyR".into()
+}
+
 pub fn default_update_source() -> String {
     "cnb".into()
 }
@@ -225,6 +241,8 @@ impl Default for Settings {
             copy_after_capture: true,
             auto_save: true,
             capture_shortcut: default_capture_shortcut(),
+            scroll_shortcut: default_scroll_shortcut(),
+            pin_shortcut: default_pin_shortcut(),
             update_source: default_update_source(),
             ocr_provider: default_ocr_provider(),
             api_key: String::new(),

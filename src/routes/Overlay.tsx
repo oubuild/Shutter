@@ -1310,15 +1310,18 @@ export function Overlay({ monitorId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box, busy, monitor]);
 
-  // Tray 长截图 boots the overlay with `?boot=scroll`: frame a selection and
-  // the scroll session starts on its own, as if the toolbar's 长截图 button had
-  // been pressed (the reference tray opens the same flow from its menu).
+  // Tray 长截图 / global hotkeys boot the overlay with `?boot=scroll|pin`:
+  // frame a selection and the action fires on its own, as if the toolbar's
+  // 长截图 or 贴图 button had been pressed (the reference tray opens the same
+  // flows from its menu).
   const bootFired = useRef(false);
   useEffect(() => {
-    if (bootTool !== "scroll" || bootFired.current) return;
+    if (bootTool !== "scroll" && bootTool !== "pin") return;
+    if (bootFired.current) return;
     if (!box || !monitor || busy || !isUsableSelection(box)) return;
     bootFired.current = true;
-    void startScroll();
+    if (bootTool === "scroll") void startScroll();
+    else void confirm("pin");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box, monitor, busy]);
 

@@ -86,6 +86,10 @@ export type Settings = {
   autoSave: boolean;
   /** Global capture hotkey as a `global-hotkey` accelerator string. */
   captureShortcut: string;
+  /** Global 长截图 hotkey; empty string disables the binding. */
+  scrollShortcut: string;
+  /** Global 贴图 hotkey; empty string disables the binding. */
+  pinShortcut: string;
   /**
    * Serialized `UpdateSource`; kept optional because construction sites (the
    * settings form) don't set it — the backend defaults to the CNB mirror and

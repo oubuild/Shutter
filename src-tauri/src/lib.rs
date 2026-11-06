@@ -20,12 +20,24 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-/// The accelerator currently bound to the capture hotkey.
+/// What a registered global hotkey does when it fires.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HotkeyAction {
+    /// Start a plain capture overlay.
+    Capture,
+    /// Start the overlay in scroll mode: framing a selection hands the
+    /// session straight to the long-screenshot panel (tray 长截图 semantics).
+    Scroll,
+    /// Start the overlay in pin mode: framing a selection pins it.
+    Pin,
+}
+
+/// The accelerators currently registered, with their actions.
 ///
 /// Kept in managed state so the plugin's global handler can tell "our"
-/// shortcut from any future binding without re-reading `settings.json` on every
-/// keypress.
-pub struct CaptureHotkey(pub Mutex<Option<Shortcut>>);
+/// shortcuts from any future binding without re-reading `settings.json` on
+/// every keypress.
+pub struct Hotkeys(pub Mutex<Vec<(Shortcut, HotkeyAction)>>);
 
 /// Parse a `global-hotkey` accelerator, normalising the error to a string the
 /// settings page can show.
@@ -34,29 +46,44 @@ pub fn parse_accelerator(accel: &str) -> Result<Shortcut, String> {
         .trim()
         .parse()
         .map_err(|e| format!("无效的快捷键「{accel}」：{e}"))?;
-    // A global hotkey with fewer than two modifiers shadows ordinary app
-    // shortcuts (⌘1, ⌘A, …) everywhere on the system.
-    if shortcut.mods.bits().count_ones() < 2 {
-        return Err("全局快捷键需要至少两个修饰键（如 ⌘⇧）".into());
+    // A bare key would fire while the user is typing in any app, so at least
+    // one modifier is required — but ONE is enough (the reference presets
+    // include single-modifier combos like Option+R); demanding two made every
+    // binding a three-key chord for no safety gain.
+    if shortcut.mods.bits().count_ones() < 1 {
+        return Err("全局快捷键需要至少一个修饰键（⌘ / ⌃ / ⌥ / ⇧）".into());
     }
     Ok(shortcut)
 }
 
-/// (Re)register the capture hotkey and remember it for the global handler.
+/// (Re)register every global hotkey from `settings` and remember them for the
+/// global handler.
 ///
-/// Only this one global shortcut exists, so clearing the manager first is the
-/// simplest way to guarantee a rebind cannot leave the old accelerator live.
-pub fn register_capture_hotkey(app: &AppHandle, accel: &str) -> Result<(), String> {
-    let shortcut = parse_accelerator(accel)?;
+/// `unregister_all` first so a rebind cannot leave the old accelerator live.
+/// An empty accelerator disables that binding instead of failing — the only
+/// way to turn a hotkey off without losing its value.
+pub fn register_hotkeys(app: &AppHandle, settings: &crate::types::Settings) -> Result<(), String> {
+    let bindings: Vec<(Shortcut, HotkeyAction)> = [
+        (settings.capture_shortcut.trim(), HotkeyAction::Capture),
+        (settings.scroll_shortcut.trim(), HotkeyAction::Scroll),
+        (settings.pin_shortcut.trim(), HotkeyAction::Pin),
+    ]
+    .into_iter()
+    .filter(|(accel, _)| !accel.is_empty())
+    .map(|(accel, action)| parse_accelerator(accel).map(|s| (s, action)))
+    .collect::<Result<Vec<_>, String>>()?;
+
     let manager = app.global_shortcut();
     let _ = manager.unregister_all();
-    manager
-        .register(shortcut)
-        .map_err(|e| format!("注册快捷键失败：{e}"))?;
-    if let Some(state) = app.try_state::<CaptureHotkey>() {
-        *state.0.lock().expect("capture hotkey lock") = Some(shortcut);
+    for (shortcut, action) in &bindings {
+        manager
+            .register(*shortcut)
+            .map_err(|e| format!("注册快捷键失败：{e}"))?;
+        log::info!("registered hotkey {shortcut:?} → {action:?}");
     }
-    log::info!("registered capture hotkey {accel}");
+    if let Some(state) = app.try_state::<Hotkeys>() {
+        *state.0.lock().expect("hotkeys lock") = bindings;
+    }
     Ok(())
 }
 
@@ -106,26 +133,46 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    // Only the accelerator currently bound to capture fires; a
-                    // rebind replaces it, so compare ids rather than key codes.
-                    let Some(state) = app.try_state::<CaptureHotkey>() else {
+                    // Only accelerators currently bound fire; a rebind replaces
+                    // them, so compare ids rather than key codes.
+                    let Some(state) = app.try_state::<Hotkeys>() else {
                         return;
                     };
-                    let current = *state.0.lock().expect("capture hotkey lock");
-                    if !current.is_some_and(|c| c.id() == shortcut.id()) {
+                    let action = state
+                        .0
+                        .lock()
+                        .expect("hotkeys lock")
+                        .iter()
+                        .find(|(s, _)| s.id() == shortcut.id())
+                        .map(|(_, a)| *a);
+                    let Some(action) = action else {
                         return;
-                    }
+                    };
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(e) = commands::start_capture(&app).await {
-                            log::error!("capture shortcut failed: {e:#}");
+                        let result = match action {
+                            HotkeyAction::Capture => commands::start_capture(&app).await,
+                            HotkeyAction::Scroll => {
+                                // Same handover as the tray's 长截图 row: the
+                                // overlay boots in scroll mode, so framing a
+                                // selection starts the session directly.
+                                crate::overlay::request_boot_tool("scroll");
+                                commands::start_capture(&app).await
+                            }
+                            HotkeyAction::Pin => {
+                                crate::overlay::request_boot_tool("pin");
+                                commands::start_capture(&app).await
+                            }
+                        };
+                        if let Err(e) = result {
+                            log::error!("hotkey {action:?} failed: {e:#}");
                         }
                     });
                 })
                 .build(),
         )
         .manage(Arc::new(session::Store::new()))
-        .manage(CaptureHotkey(Mutex::new(None)))
+        .manage(Hotkeys(Mutex::new(Vec::new())))
         .manage(ChatBind::default())
         .setup(|app| {
             // Menu-bar agent: no Dock icon, no app menu.
@@ -139,15 +186,25 @@ pub fn run() {
             windows::set_tray(app.handle())?;
 
             // Register whatever the user last saved, falling back to the
-            // default if the accelerator is no longer parseable (hand-edited
+            // defaults if an accelerator is no longer parseable (hand-edited
             // settings.json, removed keyboard layout, another app owns it).
-            let configured = settings::load_settings().capture_shortcut;
-            log::info!("capture hotkey: {configured}");
-            if let Err(e) = register_capture_hotkey(app.handle(), &configured) {
-                log::warn!("cannot register {configured} ({e}); trying the default");
-                let fallback = types::default_capture_shortcut();
-                if let Err(e) = register_capture_hotkey(app.handle(), &fallback) {
-                    log::warn!("cannot register the default hotkey ({e}); the tray menu still works");
+            let settings = settings::load_settings();
+            log::info!(
+                "hotkeys: capture={} scroll={} pin={}",
+                settings.capture_shortcut,
+                settings.scroll_shortcut,
+                settings.pin_shortcut
+            );
+            if let Err(e) = register_hotkeys(app.handle(), &settings) {
+                log::warn!("cannot register the saved hotkeys ({e}); trying the defaults");
+                let mut fallback = crate::types::Settings::default();
+                // Keep every field the user actually configured; only the
+                // hotkeys fall back, so a broken accelerator cannot poison
+                // the rest of the registration.
+                fallback.base_url = settings.base_url.clone();
+                fallback.model = settings.model.clone();
+                if let Err(e) = register_hotkeys(app.handle(), &fallback) {
+                    log::warn!("cannot register the default hotkeys ({e}); the tray menu still works");
                 }
             }
 

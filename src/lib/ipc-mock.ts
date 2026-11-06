@@ -109,6 +109,8 @@ function installIpcMock() {
     copyAfterCapture: true,
     autoSave: true,
     captureShortcut: "CmdOrControl+Shift+KeyA",
+    scrollShortcut: "CmdOrControl+Shift+KeyL",
+    pinShortcut: "CmdOrControl+Shift+KeyR",
     ocrProvider: "system",
   };
 

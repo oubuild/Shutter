@@ -81,7 +81,7 @@ export function ShortcutRecorder({
         )}
       </button>
       {recording && !error && (
-        <span className="text-mini color-faint">Esc 取消 · 需含 ⌘ / ⌃ / ⌥ / ⇧</span>
+        <span className="text-mini color-faint">Esc 取消 · 至少含一个修饰键</span>
       )}
       {error && <span className="text-mini text-error-600">{error}</span>}
     </div>

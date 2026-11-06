@@ -343,9 +343,18 @@ pub fn open_chat(app: &AppHandle, crop_id: Option<&str>, action: Option<&str>) -
 /// 录屏 is not implemented in Shutter, and the gallery/shortcuts entries are
 /// Shutter's own extras.
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let accel = format_accelerator(&crate::settings::load_settings().capture_shortcut);
-    let capture = MenuItem::with_id(app, "capture", format!("截图  {accel}"), true, None::<&str>)?;
-    let longshot = MenuItem::with_id(app, "longshot", "长截图", true, None::<&str>)?;
+    let settings = crate::settings::load_settings();
+    let capture_accel = format_accelerator(&settings.capture_shortcut);
+    // An empty accelerator means the binding is disabled; the row then shows
+    // no chord at all instead of a stale one.
+    let scroll_accel = format_accelerator(&settings.scroll_shortcut);
+    let capture = MenuItem::with_id(app, "capture", format!("截图  {capture_accel}"), true, None::<&str>)?;
+    let longshot_label = if scroll_accel.is_empty() {
+        "长截图".to_string()
+    } else {
+        format!("长截图  {scroll_accel}")
+    };
+    let longshot = MenuItem::with_id(app, "longshot", longshot_label, true, None::<&str>)?;
     let gallery = MenuItem::with_id(app, "gallery", "打开 Shutter", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let shortcuts = MenuItem::with_id(app, "shortcuts", "快捷键…", true, None::<&str>)?;
