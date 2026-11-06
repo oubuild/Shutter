@@ -357,15 +357,6 @@ fn luma_at(img: &RgbaImage, x: u32, y: u32) -> f64 {
     (p.0[0] as f64 * 30.0 + p.0[1] as f64 * 59.0 + p.0[2] as f64 * 11.0) / 100.0
 }
 
-/// Edge energy per row (Sobel-ish horizontal difference), for edge NCC.
-fn row_edge(img: &RgbaImage, y: u32) -> f64 {
-    let w = img.width();
-    if w < 2 {
-        return 0.0;
-    }
-    row_edge_span(img, y, 0, w)
-}
-
 /// Edge energy per row over a horizontal span [x_lo, x_hi): the per-region
 /// variant used by the column tiles.
 fn row_edge_span(img: &RgbaImage, y: u32, x_lo: u32, x_hi: u32) -> f64 {

@@ -279,6 +279,18 @@ impl Stitcher {
         &self.last_frame
     }
 
+    /// A downscaled snapshot of the ACCUMULATED image for the live side
+    /// preview (reference `ScrollScreenshot/screen_scroll.png`: the panel
+    /// watches the stitched result grow, not the newest viewport).
+    ///
+    /// Publishing the full-resolution buffer every ~20px step would re-encode
+    /// a multi-megabyte PNG inside the capture loop, so the snapshot is capped
+    /// at 900 on the longest side — far above what the ≤360×520 panel ever
+    /// shows, while keeping the true aspect ratio.
+    pub fn preview_image(&self) -> RgbaImage {
+        crate::output::thumbnail(&self.image, 900)
+    }
+
     /// Strip the detected sticky bars from the final image (reference
     /// `stitch_incremental_with_fixed_margins` de-duplicates fixed bars).
     pub fn finish(mut self) -> RgbaImage {

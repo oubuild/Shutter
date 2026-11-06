@@ -827,7 +827,7 @@ fn worker_loop(
         Err(e) => {
             log::warn!("[长截图] 无法打开显示器 {}: {e:#}", monitor_info.id);
             let stitcher = Stitcher::new(first);
-            publish_preview(&app, stitcher.last_frame());
+            publish_preview(&app, &stitcher.preview_image());
             *control.result.lock().unwrap() = Some(stitcher);
             return;
         }
@@ -878,7 +878,7 @@ fn worker_loop(
         // the reference tip 将鼠标移入选区域后将开始滚动截图.
         let _ = app.emit("show_scroll_tip", true);
     }
-    publish_preview(&app, stitcher.last_frame());
+    publish_preview(&app, &stitcher.preview_image());
 
     let mut consecutive_rejects: u32 = 0;
     let mut bottom_stills: u32 = 0;
@@ -998,7 +998,7 @@ fn worker_loop(
                     stitcher.height()
                 ));
                 if added > 0 {
-                    publish_preview(&app, stitcher.last_frame());
+                    publish_preview(&app, &stitcher.preview_image());
                 }
                 if stitcher.height() >= MAX_ACCUMULATED_HEIGHT {
                     log::warn!("[长截图] 累计高度达上限，自动停止");
@@ -1039,7 +1039,7 @@ fn worker_loop(
                         offset,
                     );
                     if added > 0 {
-                        publish_preview(&app, stitcher.last_frame());
+                        publish_preview(&app, &stitcher.preview_image());
                     }
                     consecutive_rejects = 0;
                     bottom_stills = 0;
@@ -1090,7 +1090,7 @@ fn worker_loop(
                         FrameDecision::Append { offset, .. } => {
                             let added = stitcher.append(retry.clone(), &d2, offset);
                             if added > 0 {
-                                publish_preview(&app, stitcher.last_frame());
+                                publish_preview(&app, &stitcher.preview_image());
                             }
                             accepted = true;
                             break;
